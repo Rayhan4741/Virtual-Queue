@@ -2,11 +2,14 @@ import mongoose, { Schema, Document } from 'mongoose';
 
 export type OrganizationType = 'BANK' | 'HOSPITAL' | 'PUBLIC_OFFICE' | 'UNIVERSITY' | 'UTILITY' | 'OTHER';
 export type OrganizationStatus = 'ACTIVE' | 'INACTIVE';
+export type SubscriptionPlan = 'FREE' | 'PRO' | 'ENTERPRISE';
 
 export interface IOrganization extends Document {
   name: string;
   type: OrganizationType;
   description?: string;
+  timezone: string;
+  plan: SubscriptionPlan;
   location: {
     address: string;
     city: string;
@@ -35,6 +38,8 @@ const organizationSchema = new Schema<IOrganization>(
       index: true,
     },
     description: { type: String, trim: true, maxlength: 500 },
+    timezone: { type: String, default: 'Asia/Dhaka' },
+    plan: { type: String, enum: ['FREE', 'PRO', 'ENTERPRISE'], default: 'FREE' },
     location: {
       address: { type: String, required: true, trim: true },
       city: { type: String, required: true, trim: true, index: true },
