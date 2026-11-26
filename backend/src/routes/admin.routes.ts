@@ -1,7 +1,8 @@
 import { Router } from 'express';
 import bcrypt from 'bcryptjs';
 import { z } from 'zod';
-import { Organization } from '../models/Organization.js';
+import { Organization, type SubscriptionPlan } from '../models/Organization.js';
+import { Branch } from '../models/Branch.js';
 import { Counter } from '../models/Counter.js';
 import { User } from '../models/User.js';
 import { AuditLog } from '../models/AuditLog.js';
@@ -228,6 +229,98 @@ router.patch('/staff/:id', async (req: AuthRequest, res, next) => {
     if (req.body.name) staff.name = req.body.name;
     await staff.save();
     res.json({ staff: { id: staff._id, name: staff.name, phone: staff.phone, status: staff.status } });
+  } catch (err) {
+    next(err);
+  }
+});
+
+const PLAN_LIMITS: Record<SubscriptionPlan, { maxBranches: number; maxCounters: number; priceUsdMonth: number }> = {
+  FREE: { maxBranches: 1, maxCounters: 3, priceUsdMonth: 0 },
+  PRO: { maxBranches: 10, maxCounters: 25, priceUsdMonth: 49 },
+  ENTERPRISE: { maxBranches: 100, maxCounters: 200, priceUsdMonth: 199 },
+};
+
+router.get('/branches', async (req: AuthRequest, res, next) => {
+  try {
+    const orgId = await resolveAdminOrgId(req);
+    if (!orgId) {
+      res.json({ branches: [] });
+      return;
+    }
+    const branches = await Branch.find({ organizationId: orgId }).sort({ createdAt: 1 }).lean();
+    res.json({ branches });
+  } catch (err) {
+    next(err);
+  }
+});
+
+const branchSchema = z.object({
+  organizationId: z.string().optional(),
+  name: z.string().trim().min(2).max(120),
+  code: z.string().trim().min(2).max(12),
+  address: z.string().trim().min(2),
+  city: z.string().trim().min(2),
+  timezone: z.string().default('Asia/Dhaka'),
+});
+
+router.post('/branches', validateBody(branchSchema), async (req: AuthRequest, res, next) => {
+  try {
+    const orgId = await resolveAdminOrgId(req);
+    if (!orgId) {
+      res.status(403).json({ error: 'No owned organization found' });
+      return;
+    }
+    const org = await Organization.findById(orgId).lean();
+    const plan: SubscriptionPlan = org?.plan || 'FREE';
+    const currentBranches = await Branch.countDocuments({ organizationId: orgId });
+    if (currentBranches >= PLAN_LIMITS[plan].maxBranches) {
+      res.status(403).json({
+        error: `Your ${plan} plan allows up to ${PLAN_LIMITS[plan].maxBranches} branch(es). Upgrade to PRO or ENTERPRISE.`,
+        code: 'PLAN_LIMIT_REACHED',
+      });
+      return;
+    }
+    const branch = await Branch.create({
+      organizationId: orgId,
+      name: req.body.name,
+      code: req.body.code.toUpperCase(),
+      location: { address: req.body.address, city: req.body.city },
+      timezone: req.body.timezone,
+    });
+    res.status(201).json({ branch });
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.get('/plan', async (req: AuthRequest, res, next) => {
+  try {
+    const orgId = await resolveAdminOrgId(req);
+    if (!orgId) {
+      res.json({ plan: 'FREE', limits: PLAN_LIMITS.FREE, plans: PLAN_LIMITS });
+      return;
+    }
+    const org = await Organization.findById(orgId).select('plan').lean();
+    const plan: SubscriptionPlan = org?.plan || 'FREE';
+    res.json({ plan, limits: PLAN_LIMITS[plan], plans: PLAN_LIMITS });
+  } catch (err) {
+    next(err);
+  }
+});
+
+const planSchema = z.object({
+  organizationId: z.string().optional(),
+  plan: z.enum(['FREE', 'PRO', 'ENTERPRISE']),
+});
+router.post('/plan', validateBody(planSchema), async (req: AuthRequest, res, next) => {
+  try {
+    const orgId = await resolveAdminOrgId(req);
+    if (!orgId) {
+      res.status(403).json({ error: 'No owned organization found' });
+      return;
+    }
+    const org = await Organization.findByIdAndUpdate(orgId, { $set: { plan: req.body.plan } }, { new: true });
+    res.json({ plan: org?.plan, limits: PLAN_LIMITS[req.body.plan as SubscriptionPlan] });
   } catch (err) {
     next(err);
   }
