@@ -4,6 +4,7 @@ export type CounterStatus = 'ACTIVE' | 'PAUSED' | 'INACTIVE';
 
 export interface ICounter extends Document {
   organizationId: mongoose.Types.ObjectId;
+  branchId?: mongoose.Types.ObjectId;
   name: string;
   counterNumber: number;
   assignedServices: mongoose.Types.ObjectId[];
@@ -17,6 +18,7 @@ export interface ICounter extends Document {
 const counterSchema = new Schema<ICounter>(
   {
     organizationId: { type: Schema.Types.ObjectId, ref: 'Organization', required: true, index: true },
+    branchId: { type: Schema.Types.ObjectId, ref: 'Branch', index: true },
     name: { type: String, required: true, trim: true, maxlength: 80 },
     counterNumber: { type: Number, required: true, min: 1 },
     assignedServices: [{ type: Schema.Types.ObjectId, ref: 'Service', index: true }],
