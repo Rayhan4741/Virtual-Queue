@@ -3,8 +3,9 @@
 import React, { useState } from 'react';
 import Link from 'next/link';
 import { useQuery } from '@tanstack/react-query';
-import { Search, MapPin, Building2, Monitor, ArrowRight } from 'lucide-react';
+import { Search, MapPin, Building2, Monitor, ArrowRight, Globe } from 'lucide-react';
 import { apiFetch } from '@/lib/api';
+import { Map3D } from '@/components/Map3D';
 import { Card, CardBody } from '@/components/ui/Card';
 import { Badge } from '@/components/ui/Badge';
 import { Button } from '@/components/ui/Button';
@@ -15,7 +16,7 @@ interface OrgItem {
   name: string;
   type: string;
   description?: string;
-  location: { address: string; city: string };
+  location: { address: string; city: string; lat?: number; lng?: number };
   servicesCount: number;
   waitingCount: number;
 }
@@ -25,6 +26,7 @@ const ORG_TYPES = ['ALL', 'BANK', 'HOSPITAL', 'PUBLIC_OFFICE', 'UNIVERSITY', 'UT
 export default function OrganizationsPage() {
   const [search, setSearch] = useState('');
   const [type, setType] = useState('ALL');
+  const [showMap, setShowMap] = useState(true);
 
   const { data, isLoading } = useQuery({
     queryKey: ['organizations', search, type],
@@ -39,10 +41,31 @@ export default function OrganizationsPage() {
 
   return (
     <div className="mx-auto max-w-7xl px-4 py-8 sm:px-6 lg:px-8 space-y-6">
-      <div>
-        <h1 className="text-2xl font-bold text-slate-900">Explore Organizations</h1>
-        <p className="text-sm text-slate-600">Select a bank, hospital, or public office to view live queues and book a token.</p>
+      <div className="flex flex-wrap items-center justify-between gap-4">
+        <div>
+          <h1 className="text-2xl font-bold text-slate-900">Explore Organizations</h1>
+          <p className="text-sm text-slate-600">Select a bank, hospital, or public office to view live queues and book a token.</p>
+        </div>
+        <Button variant="outline" size="sm" onClick={() => setShowMap((v) => !v)}>
+          <Globe className="h-4 w-4" /> {showMap ? 'Hide 3D Map' : 'Show 3D Map'}
+        </Button>
       </div>
+
+      {showMap && orgs.some((o) => o.location?.lat && o.location?.lng) && (
+        <Map3D
+          height="360px"
+          markers={orgs
+            .filter((o) => o.location?.lat && o.location?.lng)
+            .map((o) => ({
+              id: o._id,
+              name: o.name,
+              subtitle: `${o.type.replace('_', ' ')} • ${o.waitingCount} waiting`,
+              lat: o.location.lat!,
+              lng: o.location.lng!,
+              href: `/organizations/${o._id}`,
+            }))}
+        />
+      )}
 
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
         <div className="relative flex-1">

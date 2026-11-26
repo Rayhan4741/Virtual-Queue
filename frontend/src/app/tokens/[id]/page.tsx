@@ -14,6 +14,7 @@ import { tokenStatusBadge } from '@/components/ui/Badge';
 import { ConfirmDialog } from '@/components/ui/ConfirmDialog';
 import { QRScannerModal } from '@/components/QRScannerModal';
 import { Skeleton } from '@/components/ui/Skeleton';
+import { Map3D } from '@/components/Map3D';
 
 export default function ActiveTokenPage() {
   const params = useParams<{ id: string }>();
@@ -31,6 +32,7 @@ export default function ActiveTokenPage() {
     shouldLeaveNow: boolean;
   } | null>(null);
   const [locLoading, setLocLoading] = useState(false);
+  const [userCoords, setUserCoords] = useState<[number, number] | null>(null);
 
   const { data, isLoading } = useQuery({
     queryKey: ['token', id],
@@ -44,7 +46,7 @@ export default function ActiveTokenPage() {
           latePassUsed: boolean;
           snoozeCount: number;
           updatedAt: string;
-          organizationId: { _id: string; name: string; location: { address: string; city: string } };
+          organizationId: { _id: string; name: string; location: { address: string; city: string; lat?: number; lng?: number } };
           serviceId: { _id: string; name: string; maxSnoozes: number; snoozeDelayMinutes: number };
           counterId?: { name: string; counterNumber: number };
         };
@@ -120,6 +122,7 @@ export default function ActiveTokenPage() {
     setLocLoading(true);
     navigator.geolocation.getCurrentPosition(
       async (pos) => {
+        setUserCoords([pos.coords.longitude, pos.coords.latitude]);
         try {
           const res = await apiFetch<{
             travel: { durationMinutes: number; distanceKm: number; note: string };
@@ -227,6 +230,25 @@ export default function ActiveTokenPage() {
       </Card>
 
       <QRScannerModal open={qrOpen} onClose={() => setQrOpen(false)} onSubmitPayload={(payload) => checkInMutation.mutate(payload)} loading={checkInMutation.isPending} />
+      {token.organizationId.location?.lat && token.organizationId.location?.lng && (
+        <Map3D
+          height="320px"
+          markers={[
+            {
+              id: token.organizationId._id,
+              name: token.organizationId.name,
+              subtitle: `${token.organizationId.location.address}, ${token.organizationId.location.city}`,
+              lat: token.organizationId.location.lat,
+              lng: token.organizationId.location.lng,
+            },
+          ]}
+          route={
+            userCoords
+              ? { from: userCoords, to: [token.organizationId.location.lng, token.organizationId.location.lat] }
+              : null
+          }
+        />
+      )}
       <ConfirmDialog open={confirmCancel} onClose={() => setConfirmCancel(false)} onConfirm={() => cancelMutation.mutate()} title="Cancel Token?" description="Cancelling removes you from the queue permanently." confirmLabel="Yes, Cancel Token" loading={cancelMutation.isPending} />
       <ConfirmDialog open={confirmLatePass} onClose={() => setConfirmLatePass(false)} onConfirm={() => latePassMutation.mutate()} title="Use Your One-Time Late Pass?" description="This will recover your NO_SHOW token as CHECKED_IN and place you 5 places back." confirmLabel="Apply Late Pass" variant="primary" loading={latePassMutation.isPending} />
     </div>
