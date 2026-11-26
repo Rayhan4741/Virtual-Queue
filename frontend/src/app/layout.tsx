@@ -6,6 +6,10 @@ export const metadata: Metadata = {
   title: 'Virtual Queue — Smart Queue Management',
   description: 'Real-time remote token and queue management platform for banks, hospitals, and public offices.',
   manifest: '/manifest.webmanifest',
+  icons: {
+    icon: '/icons/icon-192.svg',
+    apple: '/icons/icon-192.svg',
+  },
 };
 
 export const viewport: Viewport = {
