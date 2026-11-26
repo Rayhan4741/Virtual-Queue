@@ -3,6 +3,7 @@ import mongoose from 'mongoose';
 import { Token, type IToken, type TokenSource, type TokenStatus } from '../models/Token.js';
 import { TokenCounter } from '../models/TokenCounter.js';
 import { Service, type IService } from '../models/Service.js';
+import { Organization } from '../models/Organization.js';
 import { Counter } from '../models/Counter.js';
 import { MonthlyUsage } from '../models/MonthlyUsage.js';
 import { ServiceLog } from '../models/ServiceLog.js';
@@ -39,12 +40,22 @@ export function isValidTransition(from: TokenStatus, to: TokenStatus): boolean {
   return ALLOWED_TRANSITIONS[from]?.includes(to) ?? false;
 }
 
-export function getTodayDateString(): string {
-  return new Date().toISOString().slice(0, 10); // YYYY-MM-DD
+export function getTodayDateString(timeZone = 'Asia/Dhaka', now = new Date()): string {
+  try {
+    // en-CA formats deterministically as YYYY-MM-DD in the target IANA timezone
+    return new Intl.DateTimeFormat('en-CA', {
+      timeZone,
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+    }).format(now);
+  } catch {
+    return now.toISOString().slice(0, 10);
+  }
 }
 
-export function getCurrentMonthString(): string {
-  return new Date().toISOString().slice(0, 7); // YYYY-MM
+export function getCurrentMonthString(timeZone = 'Asia/Dhaka', now = new Date()): string {
+  return getTodayDateString(timeZone, now).slice(0, 7); // YYYY-MM
 }
 
 /**
@@ -179,8 +190,10 @@ export async function issueToken(input: IssueTokenInput): Promise<IToken> {
     throw new QueueEngineError('Remote booking is disabled for this service.', 400, 'REMOTE_DISABLED');
   }
 
-  const queueDate = getTodayDateString();
-  const month = getCurrentMonthString();
+  const org = await Organization.findById(input.organizationId).select('timezone').lean();
+  const tz = org?.timezone || 'Asia/Dhaka';
+  const queueDate = getTodayDateString(tz);
+  const month = getCurrentMonthString(tz);
 
   // Remote token validations: duplicate active token & monthly quota
   if (input.source === 'REMOTE') {
@@ -439,7 +452,8 @@ export async function callNextToken(counterId: string, staffId: string, staffRol
   }
 
   const now = new Date();
-  const queueDate = getTodayDateString();
+  const org = await Organization.findById(counter.organizationId).select('timezone').lean();
+  const queueDate = getTodayDateString(org?.timezone || 'Asia/Dhaka', now);
   const candidates = await Token.find({
     serviceId: { $in: counter.assignedServices },
     queueDate,
