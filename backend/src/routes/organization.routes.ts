@@ -15,6 +15,7 @@ const orgSchema = z.object({
   name: z.string().trim().min(2).max(150),
   type: z.enum(['BANK', 'HOSPITAL', 'PUBLIC_OFFICE', 'UNIVERSITY', 'UTILITY', 'OTHER']),
   description: z.string().trim().max(500).optional(),
+  timezone: z.string().default('Asia/Dhaka'),
   location: z.object({
     address: z.string().trim().min(2),
     city: z.string().trim().min(2),
@@ -108,7 +109,7 @@ router.patch('/:id', authenticate, requireRole('ADMIN'), async (req: AuthRequest
       res.status(403).json({ error: 'You do not own this organization' });
       return;
     }
-    const allowedFields = ['name', 'type', 'description', 'location', 'workingHours', 'status'] as const;
+    const allowedFields = ['name', 'type', 'description', 'timezone', 'location', 'workingHours', 'status'] as const;
     for (const field of allowedFields) {
       if (req.body[field] !== undefined) {
         (org as unknown as Record<string, unknown>)[field] = req.body[field];
