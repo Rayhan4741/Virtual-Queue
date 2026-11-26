@@ -2,6 +2,7 @@ import mongoose, { Schema, Document } from 'mongoose';
 
 export interface IService extends Document {
   organizationId: mongoose.Types.ObjectId;
+  branchId?: mongoose.Types.ObjectId;
   name: string;
   codePrefix: string;
   description?: string;
@@ -29,6 +30,7 @@ export interface IService extends Document {
 const serviceSchema = new Schema<IService>(
   {
     organizationId: { type: Schema.Types.ObjectId, ref: 'Organization', required: true, index: true },
+    branchId: { type: Schema.Types.ObjectId, ref: 'Branch', index: true },
     name: { type: String, required: true, trim: true, maxlength: 120 },
     codePrefix: { type: String, required: true, trim: true, uppercase: true, maxlength: 4, default: 'A' },
     description: { type: String, trim: true, maxlength: 500 },
