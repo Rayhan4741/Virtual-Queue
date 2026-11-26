@@ -15,7 +15,7 @@ import { Input } from '@/components/ui/Input';
 import { Badge, tokenStatusBadge } from '@/components/ui/Badge';
 import { Modal } from '@/components/ui/Modal';
 
-type AdminTab = 'overview' | 'analytics' | 'services' | 'counters' | 'staff' | 'audit';
+type AdminTab = 'overview' | 'analytics' | 'services' | 'counters' | 'staff' | 'branches' | 'audit';
 
 export default function AdminDashboard() {
   const { user, loading: authLoading } = useAuth();
@@ -28,12 +28,14 @@ export default function AdminDashboard() {
   const [svcModal, setSvcModal] = useState(false);
   const [counterModal, setCounterModal] = useState(false);
   const [staffModal, setStaffModal] = useState(false);
+  const [branchModal, setBranchModal] = useState(false);
   const [qrPreview, setQrPreview] = useState<{ qrDataUrl: string; qrPayload: string } | null>(null);
 
   const [orgForm, setOrgForm] = useState({ name: '', type: 'BANK', address: '', city: '' });
   const [svcForm, setSvcForm] = useState({ name: '', codePrefix: 'B', avgServiceTimeSec: 300, monthlyQuota: 10 });
   const [counterForm, setCounterForm] = useState({ name: '', counterNumber: 2, serviceId: '', staffId: '' });
   const [staffForm, setStaffForm] = useState({ name: '', phone: '', password: '' });
+  const [branchForm, setBranchForm] = useState({ name: '', code: '', address: '', city: '', timezone: 'Asia/Dhaka' });
 
   useEffect(() => {
     if (!authLoading && (!user || user.role !== 'ADMIN')) {
@@ -138,6 +140,47 @@ export default function AdminDashboard() {
     enabled: Boolean(activeOrg) && tab === 'audit',
   });
 
+  const { data: branchesData } = useQuery({
+    queryKey: ['admin-branches', activeOrg?._id],
+    queryFn: () =>
+      apiFetch<{ branches: Array<{ _id: string; name: string; code: string; timezone: string; location: { address: string; city: string }; status: string }> }>(
+        `/admin/branches?organizationId=${activeOrg?._id}`
+      ),
+    enabled: Boolean(activeOrg) && tab === 'branches',
+  });
+
+  const { data: planData } = useQuery({
+    queryKey: ['admin-plan', activeOrg?._id],
+    queryFn: () =>
+      apiFetch<{
+        plan: 'FREE' | 'PRO' | 'ENTERPRISE';
+        limits: { maxBranches: number; maxCounters: number; priceUsdMonth: number };
+        plans: Record<string, { maxBranches: number; maxCounters: number; priceUsdMonth: number }>;
+      }>(`/admin/plan?organizationId=${activeOrg?._id}`),
+    enabled: Boolean(activeOrg) && tab === 'branches',
+  });
+
+  const createBranch = useMutation({
+    mutationFn: () => apiFetch('/admin/branches', { method: 'POST', body: JSON.stringify({ ...branchForm, organizationId: activeOrg!._id }) }),
+    onSuccess: () => {
+      toast({ type: 'success', title: 'Branch created' });
+      setBranchModal(false);
+      setBranchForm({ name: '', code: '', address: '', city: '', timezone: 'Asia/Dhaka' });
+      queryClient.invalidateQueries({ queryKey: ['admin-branches'] });
+    },
+    onError: (err) => toast({ type: 'error', title: 'Branch limit or error', message: (err as Error).message }),
+  });
+
+  const updatePlan = useMutation({
+    mutationFn: (plan: 'FREE' | 'PRO' | 'ENTERPRISE') =>
+      apiFetch('/admin/plan', { method: 'POST', body: JSON.stringify({ organizationId: activeOrg!._id, plan }) }),
+    onSuccess: () => {
+      toast({ type: 'success', title: 'B2B Subscription plan updated' });
+      queryClient.invalidateQueries({ queryKey: ['admin-plan'] });
+    },
+    onError: (err) => toast({ type: 'error', title: 'Error', message: (err as Error).message }),
+  });
+
   const createOrg = useMutation({
     mutationFn: () =>
       apiFetch('/organizations', {
@@ -216,7 +259,7 @@ export default function AdminDashboard() {
       </div>
 
       <div className="flex flex-wrap gap-2 border-b border-slate-200 pb-3">
-        {([['overview', 'Overview'], ['analytics', 'Analytics'], ['services', 'Services'], ['counters', 'Counters'], ['staff', 'Staff'], ['audit', 'Audit Logs']] as const).map(([key, label]) => (
+        {([['overview', 'Overview'], ['analytics', 'Analytics'], ['services', 'Services'], ['counters', 'Counters'], ['staff', 'Staff'], ['branches', 'Branches & Plan'], ['audit', 'Audit Logs']] as const).map(([key, label]) => (
           <button key={key} onClick={() => setTab(key)} className={`rounded-lg px-3.5 py-2 text-xs font-semibold transition-colors ${tab === key ? 'bg-slate-900 text-white' : 'text-slate-600 hover:bg-slate-100'}`}>
             {label}
           </button>
@@ -354,6 +397,52 @@ export default function AdminDashboard() {
         </Card>
       )}
 
+      {tab === 'branches' && (
+        <div className="space-y-6">
+          {planData && (
+            <Card>
+              <CardHeader title={`B2B SaaS Subscription — Current Plan: ${planData.plan}`} subtitle={`Allows up to ${planData.limits.maxBranches} branch(es) and ${planData.limits.maxCounters} counters`} />
+              <CardBody className="grid gap-4 sm:grid-cols-3">
+                {(['FREE', 'PRO', 'ENTERPRISE'] as const).map((p) => {
+                  const info = planData.plans[p];
+                  const isCurrent = planData.plan === p;
+                  return (
+                    <div key={p} className={`rounded-xl border p-4 space-y-2 ${isCurrent ? 'border-slate-900 bg-slate-50' : 'border-slate-200'}`}>
+                      <div className="flex items-center justify-between">
+                        <span className="font-bold text-sm">{p}</span>
+                        <span className="text-xs font-semibold">${info.priceUsdMonth}/mo</span>
+                      </div>
+                      <p className="text-xs text-slate-600">{info.maxBranches} branches • {info.maxCounters} counters</p>
+                      <Button size="sm" className="w-full" variant={isCurrent ? 'outline' : 'primary'} disabled={isCurrent || updatePlan.isPending} onClick={() => updatePlan.mutate(p)}>
+                        {isCurrent ? 'Current Plan' : `Switch to ${p}`}
+                      </Button>
+                    </div>
+                  );
+                })}
+              </CardBody>
+            </Card>
+          )}
+          <Card>
+            <CardHeader title="Organization Branches" action={<Button size="sm" onClick={() => setBranchModal(true)}><Plus className="h-4 w-4" /> Add Branch</Button>} />
+            <div className="divide-y divide-slate-100">
+              {(branchesData?.branches ?? []).length === 0 ? (
+                <p className="p-6 text-center text-xs text-slate-500">No additional branches created yet (using main organization branch).</p>
+              ) : (
+                branchesData!.branches.map((b) => (
+                  <div key={b._id} className="flex items-center justify-between px-6 py-4">
+                    <div>
+                      <p className="text-sm font-bold text-slate-900">[{b.code}] {b.name}</p>
+                      <p className="text-xs text-slate-500">{b.location.address}, {b.location.city} • {b.timezone}</p>
+                    </div>
+                    <Badge color={b.status === 'ACTIVE' ? 'emerald' : 'red'}>{b.status}</Badge>
+                  </div>
+                ))
+              )}
+            </div>
+          </Card>
+        </div>
+      )}
+
       {tab === 'audit' && (
         <Card>
           <CardHeader title="Append-Only Audit Logs" subtitle="Immutable record of staff and queue operations" />
@@ -431,6 +520,17 @@ export default function AdminDashboard() {
           <Input label="Phone Number" value={staffForm.phone} onChange={(e) => setStaffForm({ ...staffForm, phone: e.target.value })} required />
           <Input label="Password" type="password" minLength={6} value={staffForm.password} onChange={(e) => setStaffForm({ ...staffForm, password: e.target.value })} required />
           <Button type="submit" className="w-full" loading={createStaff.isPending}>Create Staff</Button>
+        </form>
+      </Modal>
+
+      <Modal open={branchModal} onClose={() => setBranchModal(false)} title="Add Organization Branch">
+        <form onSubmit={(e) => { e.preventDefault(); createBranch.mutate(); }} className="space-y-4">
+          <Input label="Branch Name" placeholder="Gulshan Branch" value={branchForm.name} onChange={(e) => setBranchForm({ ...branchForm, name: e.target.value })} required />
+          <Input label="Branch Code" placeholder="GUL" maxLength={12} value={branchForm.code} onChange={(e) => setBranchForm({ ...branchForm, code: e.target.value.toUpperCase() })} required />
+          <Input label="Address" value={branchForm.address} onChange={(e) => setBranchForm({ ...branchForm, address: e.target.value })} required />
+          <Input label="City" value={branchForm.city} onChange={(e) => setBranchForm({ ...branchForm, city: e.target.value })} required />
+          <Input label="Timezone (IANA)" value={branchForm.timezone} onChange={(e) => setBranchForm({ ...branchForm, timezone: e.target.value })} required />
+          <Button type="submit" className="w-full" loading={createBranch.isPending}>Create Branch</Button>
         </form>
       </Modal>
 
