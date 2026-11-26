@@ -50,7 +50,7 @@ export default function ActiveTokenPage() {
           serviceId: { _id: string; name: string; maxSnoozes: number; snoozeDelayMinutes: number };
           counterId?: { name: string; counterNumber: number };
         };
-        eta: { estimatedWaitMinutes: number; peopleAhead: number; activeCounters: number; note: string };
+        eta: { estimatedWaitMinutes: number | null; statusLabel?: string; peopleAhead: number; activeCounters: number; note: string };
         currentServingToken: string | null;
       }>(`/tokens/${id}`),
     enabled: Boolean(id),
@@ -58,15 +58,24 @@ export default function ActiveTokenPage() {
 
   useEffect(() => {
     if (!data?.token) return;
-    socket.emit('join:organization', data.token.organizationId._id);
-    socket.emit('join:service', data.token.serviceId._id);
+    const joinRooms = () => {
+      socket.emit('join:organization', data.token.organizationId._id);
+      socket.emit('join:service', data.token.serviceId._id);
+    };
+    joinRooms();
     const refresh = () => queryClient.invalidateQueries({ queryKey: ['token', id] });
+    const onReconnect = () => {
+      joinRooms();
+      refresh();
+    };
+    socket.on('connect', onReconnect);
     socket.on('token:updated', refresh);
     socket.on('token:called', refresh);
     socket.on('token:recalled', refresh);
     socket.on('token:completed', refresh);
     socket.on('queue:updated', refresh);
     return () => {
+      socket.off('connect', onReconnect);
       socket.off('token:updated', refresh);
       socket.off('token:called', refresh);
       socket.off('token:recalled', refresh);
@@ -183,7 +192,9 @@ export default function ActiveTokenPage() {
             </div>
             <div className="rounded-xl bg-slate-50 border border-slate-200 p-3.5">
               <p className="text-xs text-slate-500">Approx. Wait</p>
-              <p className="text-2xl font-bold text-emerald-600 mt-1">~{eta.estimatedWaitMinutes}m</p>
+              <p className="text-2xl font-bold text-emerald-600 mt-1">
+                {eta.estimatedWaitMinutes === null ? (eta.statusLabel || 'Unavailable') : `~${eta.estimatedWaitMinutes}m`}
+              </p>
             </div>
             <div className="rounded-xl bg-slate-50 border border-slate-200 p-3.5">
               <p className="text-xs text-slate-500">Now Serving</p>

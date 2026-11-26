@@ -2,18 +2,18 @@ import { describe, it, expect } from 'vitest';
 import { computeEtaSeconds, evaluateEtaMape } from '../../services/etaService.js';
 
 describe('Waiting Time Estimation Engine', () => {
-  it('handles zero people ahead, zero active counters, and paused services without negative values', () => {
+  it('returns meaningful null estimates for paused services or zero active counters', () => {
     expect(
       computeEtaSeconds({ peopleAhead: 0, activeCounters: 2, emaServiceTimeSec: 300, serviceAvailable: true }).waitSeconds
     ).toBe(0);
 
-    expect(
-      computeEtaSeconds({ peopleAhead: 3, activeCounters: 0, emaServiceTimeSec: 300, serviceAvailable: true }).waitSeconds
-    ).toBe(900);
+    const noCounter = computeEtaSeconds({ peopleAhead: 3, activeCounters: 0, emaServiceTimeSec: 300, serviceAvailable: true });
+    expect(noCounter.waitSeconds).toBeNull();
+    expect(noCounter.statusLabel).toBe('Counter temporarily unavailable');
 
-    expect(
-      computeEtaSeconds({ peopleAhead: 5, activeCounters: 2, emaServiceTimeSec: 300, serviceAvailable: false }).waitSeconds
-    ).toBe(0);
+    const paused = computeEtaSeconds({ peopleAhead: 5, activeCounters: 2, emaServiceTimeSec: 300, serviceAvailable: false });
+    expect(paused.waitSeconds).toBeNull();
+    expect(paused.statusLabel).toBe('Service paused');
   });
 
   it('achieves <= 25% MAPE on a realistic simulated queue dataset', () => {

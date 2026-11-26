@@ -67,12 +67,22 @@ export async function getNextTokenSequence(serviceId: string, queueDate: string)
       }
       const seq = await redis.incr(key);
       await redis.expire(key, 60 * 60 * 48);
-      // Keep MongoDB TokenCounter in sync asynchronously/best-effort
-      await TokenCounter.updateOne(
+      // Reconcile if MongoDB is ahead of Redis (e.g. Redis was offline while MongoDB fallback served requests)
+      const mongoDoc = await TokenCounter.findOneAndUpdate(
         { serviceId, date: queueDate },
         { $max: { sequence: seq } },
-        { upsert: true }
+        { upsert: true, new: true }
       );
+      if (mongoDoc.sequence > seq) {
+        const reconciled = await TokenCounter.findOneAndUpdate(
+          { serviceId, date: queueDate },
+          { $inc: { sequence: 1 } },
+          { new: true }
+        );
+        const nextSeq = reconciled!.sequence;
+        await redis.set(key, nextSeq, 'EX', 60 * 60 * 48).catch(() => {});
+        return nextSeq;
+      }
       return seq;
     } catch (err) {
       console.warn('[TokenEngine] Redis INCR failed, falling back to MongoDB:', (err as Error).message);
@@ -444,14 +454,31 @@ export async function callNextToken(counterId: string, staffId: string, staffRol
   // Group/sort using first assigned service policy
   const service = await Service.findById(counter.assignedServices[0]);
   const sorted = service ? sortEligibleQueue(candidates, service, now) : candidates;
-  const nextToken = sorted[0];
 
-  const prevState = nextToken.status;
-  nextToken.status = 'CALLED';
-  nextToken.counterId = counter._id as mongoose.Types.ObjectId;
-  nextToken.calledAt = now;
-  nextToken.recallCount = 0;
-  await nextToken.save();
+  // Atomically claim the first still-CHECKED_IN candidate to prevent multi-counter race conditions
+  let nextToken: IToken | null = null;
+  for (const candidate of sorted) {
+    const claimed = await Token.findOneAndUpdate(
+      { _id: candidate._id, status: 'CHECKED_IN' },
+      {
+        $set: {
+          status: 'CALLED',
+          counterId: counter._id as mongoose.Types.ObjectId,
+          calledAt: now,
+          recallCount: 0,
+        },
+      },
+      { new: true }
+    );
+    if (claimed) {
+      nextToken = claimed;
+      break;
+    }
+  }
+
+  if (!nextToken) {
+    throw new QueueEngineError('No checked-in customers are available (claimed by another counter).', 409, 'QUEUE_EMPTY');
+  }
 
   counter.currentTokenId = nextToken._id as mongoose.Types.ObjectId;
   await counter.save();
@@ -463,7 +490,7 @@ export async function callNextToken(counterId: string, staffId: string, staffRol
     action: 'TOKEN_CALLED',
     tokenId: nextToken._id as mongoose.Types.ObjectId,
     counterId: counter._id as mongoose.Types.ObjectId,
-    previousState: prevState,
+    previousState: 'CHECKED_IN',
     newState: 'CALLED',
     metadata: { tokenNumber: nextToken.tokenNumber, counterNumber: counter.counterNumber },
   });
@@ -691,20 +718,26 @@ export async function processExpiredCalledTokens(graceMinutes = 3): Promise<ITok
   });
 
   const updated: IToken[] = [];
-  for (const token of expired) {
-    token.status = 'NO_SHOW';
-    await token.save();
-    if (token.counterId) {
-      await Counter.updateOne({ _id: token.counterId, currentTokenId: token._id }, { $set: { currentTokenId: null } });
+  for (const candidate of expired) {
+    // Atomic claim prevents duplicate no-show processing across multiple backend instances
+    const claimed = await Token.findOneAndUpdate(
+      { _id: candidate._id, status: 'CALLED' },
+      { $set: { status: 'NO_SHOW' } },
+      { new: true }
+    );
+    if (!claimed) continue;
+
+    if (claimed.counterId) {
+      await Counter.updateOne({ _id: claimed.counterId, currentTokenId: claimed._id }, { $set: { currentTokenId: null } });
     }
-    if (token.userId) {
+    if (claimed.userId) {
       await MonthlyUsage.updateOne(
-        { userId: token.userId, organizationId: token.organizationId, month: getCurrentMonthString() },
+        { userId: claimed.userId, organizationId: claimed.organizationId, month: getCurrentMonthString() },
         { $inc: { strikes: 1 } },
         { upsert: true }
       );
     }
-    updated.push(token);
+    updated.push(claimed);
   }
   return updated;
 }

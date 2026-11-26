@@ -128,6 +128,12 @@ router.get('/:id/entrance-qr', authenticate, requireRole('ADMIN', 'STAFF'), asyn
       res.status(404).json({ error: 'Organization not found' });
       return;
     }
+    const isOwnerAdmin = req.user!.role === 'ADMIN' && org.adminId.toString() === req.user!.userId;
+    const isAssignedOrgUser = req.user!.organizationId === org._id.toString();
+    if (!isOwnerAdmin && !isAssignedOrgUser) {
+      res.status(403).json({ error: 'Forbidden: you do not belong to this organization' });
+      return;
+    }
     const signedQr = createSignedQrToken(org._id.toString(), {
       entranceCode: org.entranceQrCode,
       ttlSeconds: 60 * 60 * 12,

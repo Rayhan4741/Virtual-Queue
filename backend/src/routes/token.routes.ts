@@ -226,8 +226,9 @@ router.post('/:id/leave-alert', authenticate, validateBody(travelSchema), async 
       getServiceEta(token.serviceId.toString(), token.queueOrderScore),
     ]);
 
-    const leaveInMinutes = eta.estimatedWaitMinutes - travel.durationMinutes - req.body.bufferMinutes;
-    const shouldLeaveNow = leaveInMinutes <= 2;
+    const waitMinutes = eta.estimatedWaitMinutes ?? 0;
+    const leaveInMinutes = waitMinutes - travel.durationMinutes - req.body.bufferMinutes;
+    const shouldLeaveNow = eta.estimatedWaitMinutes !== null && leaveInMinutes <= 2;
 
     if (shouldLeaveNow) {
       await sendNotification({

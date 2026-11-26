@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import { z } from 'zod';
 import { Counter } from '../models/Counter.js';
+import { Organization } from '../models/Organization.js';
 import { Token } from '../models/Token.js';
 import { Announcement } from '../models/Announcement.js';
 import { ServiceLog } from '../models/ServiceLog.js';
@@ -17,6 +18,7 @@ import {
   issueToken,
   sortEligibleQueue,
   getTodayDateString,
+  QueueEngineError,
 } from '../services/tokenEngine.js';
 import { emitQueueEvent } from '../services/socketService.js';
 import { sendNotification } from '../services/notificationService.js';
@@ -24,6 +26,22 @@ import { recordAuditLog } from '../services/auditService.js';
 
 const router = Router();
 router.use(authenticate, requireRole('STAFF', 'ADMIN'));
+
+async function assertOrgAccess(orgId: string, user: NonNullable<AuthRequest['user']>) {
+  if (user.organizationId && user.organizationId === orgId) return;
+  if (user.role === 'ADMIN') {
+    const owned = await Organization.exists({ _id: orgId, adminId: user.userId });
+    if (owned) return;
+  }
+  throw new QueueEngineError('Forbidden: cross-organization staff access denied.', 403, 'FORBIDDEN_TENANT');
+}
+
+async function assertCounterAccess(counterId: string, user: NonNullable<AuthRequest['user']>) {
+  const counter = await Counter.findById(counterId).lean();
+  if (!counter) throw new QueueEngineError('Counter not found.', 404, 'COUNTER_NOT_FOUND');
+  await assertOrgAccess(counter.organizationId.toString(), user);
+  return counter;
+}
 
 router.get('/queue', async (req: AuthRequest, res, next) => {
   try {
@@ -71,6 +89,7 @@ router.get('/queue', async (req: AuthRequest, res, next) => {
 const counterActionSchema = z.object({ counterId: z.string() });
 router.post('/call-next', validateBody(counterActionSchema), async (req: AuthRequest, res, next) => {
   try {
+    await assertCounterAccess(req.body.counterId, req.user!);
     const token = await callNextToken(req.body.counterId, req.user!.userId, req.user!.role);
     const rooms = [`organization:${token.organizationId}`, `service:${token.serviceId}`];
     if (token.userId) rooms.push(`user:${token.userId}`);
@@ -101,6 +120,7 @@ router.post('/call-next', validateBody(counterActionSchema), async (req: AuthReq
 const tokenActionSchema = z.object({ tokenId: z.string(), counterId: z.string() });
 router.post('/recall', validateBody(tokenActionSchema), async (req: AuthRequest, res, next) => {
   try {
+    await assertCounterAccess(req.body.counterId, req.user!);
     const token = await recallToken(req.body.tokenId, req.body.counterId, req.user!.userId, req.user!.role);
     const rooms = [`organization:${token.organizationId}`, `service:${token.serviceId}`];
     if (token.userId) rooms.push(`user:${token.userId}`);
@@ -113,6 +133,7 @@ router.post('/recall', validateBody(tokenActionSchema), async (req: AuthRequest,
 
 router.post('/start', validateBody(tokenActionSchema), async (req: AuthRequest, res, next) => {
   try {
+    await assertCounterAccess(req.body.counterId, req.user!);
     const token = await startServingToken(req.body.tokenId, req.body.counterId, req.user!.userId, req.user!.role);
     emitQueueEvent('token:updated', [`organization:${token.organizationId}`, `service:${token.serviceId}`], { token });
     res.json({ token });
@@ -123,6 +144,7 @@ router.post('/start', validateBody(tokenActionSchema), async (req: AuthRequest, 
 
 router.post('/complete', validateBody(tokenActionSchema), async (req: AuthRequest, res, next) => {
   try {
+    await assertCounterAccess(req.body.counterId, req.user!);
     const token = await completeServingToken(req.body.tokenId, req.body.counterId, req.user!.userId, req.user!.role);
     const rooms = [`organization:${token.organizationId}`, `service:${token.serviceId}`];
     if (token.userId) rooms.push(`user:${token.userId}`);
@@ -143,6 +165,7 @@ const skipSchema = z.object({
 });
 router.post('/skip', validateBody(skipSchema), async (req: AuthRequest, res, next) => {
   try {
+    await assertCounterAccess(req.body.counterId, req.user!);
     const token = await skipOrNoShowToken(
       req.body.tokenId,
       req.body.reason,
@@ -166,6 +189,7 @@ const transferSchema = z.object({
 });
 router.post('/transfer', validateBody(transferSchema), async (req: AuthRequest, res, next) => {
   try {
+    await assertCounterAccess(req.body.sourceCounterId, req.user!);
     const token = await transferToken(
       req.body.tokenId,
       req.body.targetServiceId,
@@ -182,6 +206,7 @@ router.post('/transfer', validateBody(transferSchema), async (req: AuthRequest, 
 
 router.post('/counter/pause', validateBody(counterActionSchema), async (req: AuthRequest, res, next) => {
   try {
+    await assertCounterAccess(req.body.counterId, req.user!);
     const counter = await Counter.findByIdAndUpdate(req.body.counterId, { status: 'PAUSED' }, { new: true });
     if (!counter) {
       res.status(404).json({ error: 'Counter not found' });
@@ -204,6 +229,7 @@ router.post('/counter/pause', validateBody(counterActionSchema), async (req: Aut
 
 router.post('/counter/resume', validateBody(counterActionSchema), async (req: AuthRequest, res, next) => {
   try {
+    await assertCounterAccess(req.body.counterId, req.user!);
     const counter = await Counter.findByIdAndUpdate(req.body.counterId, { status: 'ACTIVE' }, { new: true });
     if (!counter) {
       res.status(404).json({ error: 'Counter not found' });
@@ -234,6 +260,7 @@ const walkInSchema = z.object({
 });
 router.post('/walk-in', validateBody(walkInSchema), async (req: AuthRequest, res, next) => {
   try {
+    await assertOrgAccess(req.body.organizationId, req.user!);
     const token = await issueToken({
       ...req.body,
       source: 'STAFF',
@@ -254,6 +281,7 @@ const announcementSchema = z.object({
 });
 router.post('/announcements', validateBody(announcementSchema), async (req: AuthRequest, res, next) => {
   try {
+    await assertOrgAccess(req.body.organizationId, req.user!);
     const announcement = await Announcement.create({
       organizationId: req.body.organizationId,
       serviceId: req.body.serviceId,

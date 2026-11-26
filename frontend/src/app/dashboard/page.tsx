@@ -42,7 +42,7 @@ export default function CustomerDashboard() {
       apiFetch<{
         tokens: TokenItem[];
         activeToken: TokenItem | null;
-        activeEta: { estimatedWaitMinutes: number; peopleAhead: number; note: string } | null;
+        activeEta: { estimatedWaitMinutes: number | null; statusLabel?: string; peopleAhead: number; note: string } | null;
       }>('/tokens/my'),
     enabled: Boolean(user),
     refetchInterval: 15000,
@@ -105,7 +105,9 @@ export default function CustomerDashboard() {
                 </div>
                 <div>
                   <p className="text-xs text-slate-400">Approx. Wait</p>
-                  <p className="text-xl font-bold text-emerald-400">~{eta.estimatedWaitMinutes} min</p>
+                  <p className="text-xl font-bold text-emerald-400">
+                    {eta.estimatedWaitMinutes === null ? (eta.statusLabel || 'Unavailable') : `~${eta.estimatedWaitMinutes} min`}
+                  </p>
                 </div>
                 <div className="col-span-2 sm:col-span-1 flex items-center justify-end">
                   <Link href={`/tokens/${active._id}`}>

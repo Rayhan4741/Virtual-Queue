@@ -20,8 +20,9 @@ export async function updateEmaServiceTime(serviceId: string, observedDurationSe
 }
 
 export interface EtaResult {
-  estimatedWaitMinutes: number;
-  estimatedWaitSeconds: number;
+  estimatedWaitMinutes: number | null;
+  estimatedWaitSeconds: number | null;
+  statusLabel: string;
   peopleAhead: number;
   activeCounters: number;
   serviceAvailable: boolean;
@@ -37,28 +38,32 @@ export function computeEtaSeconds(params: {
   activeCounters: number;
   emaServiceTimeSec: number;
   serviceAvailable: boolean;
-}): { waitSeconds: number; note: string } {
+}): { waitSeconds: number | null; statusLabel: string; note: string } {
   const { peopleAhead, activeCounters, emaServiceTimeSec, serviceAvailable } = params;
 
   if (!serviceAvailable) {
-    return { waitSeconds: 0, note: 'Service is currently paused or unavailable.' };
+    return {
+      waitSeconds: null,
+      statusLabel: 'Service paused',
+      note: 'Service is currently paused or unavailable; waiting time cannot be estimated.',
+    };
   }
   if (peopleAhead <= 0) {
-    return { waitSeconds: 0, note: 'You are next in line. Approximate wait under 1 minute.' };
+    return { waitSeconds: 0, statusLabel: 'Next in line', note: 'You are next in line. Approximate wait under 1 minute.' };
   }
   if (activeCounters <= 0) {
-    // Fallback to single-counter estimate if no counter is currently active
-    const fallbackSeconds = Math.max(0, Math.round(peopleAhead * emaServiceTimeSec));
     return {
-      waitSeconds: fallbackSeconds,
-      note: 'No active counters right now; estimate assumes 1 counter resumes.',
+      waitSeconds: null,
+      statusLabel: 'Counter temporarily unavailable',
+      note: 'No active counters right now; waiting time cannot be estimated until a counter resumes.',
     };
   }
 
   const waitSeconds = Math.max(0, Math.round((peopleAhead * emaServiceTimeSec) / activeCounters));
   return {
     waitSeconds,
-    note: 'Approximate wait time based on recent service durations and active counters.',
+    statusLabel: `~${Math.ceil(waitSeconds / 60)} min`,
+    note: 'Approximate wait time based on recent service durations and active counters (not guaranteed).',
   };
 }
 
@@ -73,8 +78,9 @@ export async function getServiceEta(serviceId: string, queueOrderScoreBefore?: n
 
   if (!service) {
     return {
-      estimatedWaitMinutes: 0,
-      estimatedWaitSeconds: 0,
+      estimatedWaitMinutes: null,
+      estimatedWaitSeconds: null,
+      statusLabel: 'Currently unavailable',
       peopleAhead: 0,
       activeCounters: 0,
       serviceAvailable: false,
@@ -93,7 +99,7 @@ export async function getServiceEta(serviceId: string, queueOrderScoreBefore?: n
 
   const peopleAhead = await Token.countDocuments(query);
   const emaSec = service.emaServiceTimeSec || service.avgServiceTimeSec || 300;
-  const { waitSeconds, note } = computeEtaSeconds({
+  const { waitSeconds, statusLabel, note } = computeEtaSeconds({
     peopleAhead,
     activeCounters,
     emaServiceTimeSec: emaSec,
@@ -101,8 +107,9 @@ export async function getServiceEta(serviceId: string, queueOrderScoreBefore?: n
   });
 
   return {
-    estimatedWaitMinutes: Math.ceil(waitSeconds / 60),
+    estimatedWaitMinutes: waitSeconds === null ? null : Math.ceil(waitSeconds / 60),
     estimatedWaitSeconds: waitSeconds,
+    statusLabel,
     peopleAhead,
     activeCounters,
     serviceAvailable: service.isAvailable,
@@ -134,7 +141,9 @@ export function evaluateEtaMape(
       emaServiceTimeSec: s.emaServiceTimeSec,
       serviceAvailable: true,
     });
-    totalPctError += Math.abs(s.actualWaitSec - waitSeconds) / s.actualWaitSec;
+    if (waitSeconds !== null) {
+      totalPctError += Math.abs(s.actualWaitSec - waitSeconds) / s.actualWaitSec;
+    }
   }
 
   return {

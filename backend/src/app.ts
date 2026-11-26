@@ -1,4 +1,5 @@
 import express from 'express';
+import crypto from 'crypto';
 import cors from 'cors';
 import helmet from 'helmet';
 import compression from 'compression';
@@ -34,6 +35,13 @@ export function createApp() {
     })
   );
   app.use(compression());
+  app.use((req, res, next) => {
+    const reqId = (req.headers['x-request-id'] as string) || crypto.randomUUID();
+    res.setHeader('X-Request-Id', reqId);
+    next();
+  });
+  // Preserve raw body for Stripe webhook signature verification before JSON parsing
+  app.use('/api/billing/webhook/stripe', express.raw({ type: 'application/json' }));
   app.use(express.json({ limit: '1mb' }));
   app.use(cookieParser());
   app.use('/api', apiLimiter);

@@ -251,7 +251,10 @@ export async function initiateExtraTokenCheckout(params: {
 /**
  * Idempotently completes a payment transaction and unlocks extra monthly quota.
  */
-export async function completePaymentAndUnlockQuota(sessionId: string): Promise<{
+export async function completePaymentAndUnlockQuota(
+  sessionId: string,
+  requestingUserId?: string
+): Promise<{
   unlocked: number;
   alreadyCompleted: boolean;
 }> {
@@ -259,20 +262,33 @@ export async function completePaymentAndUnlockQuota(sessionId: string): Promise<
   if (!tx) {
     throw new Error('Payment session not found.');
   }
+  if (requestingUserId && tx.userId.toString() !== requestingUserId) {
+    throw new Error('Forbidden: payment session belongs to another user.');
+  }
   if (tx.status === 'COMPLETED') {
     return { unlocked: 0, alreadyCompleted: true };
+  }
+  if (env.NODE_ENV === 'production' && tx.metadata?.mode === 'sandbox_simulation') {
+    throw new Error('Sandbox simulation payments cannot be verified in production.');
   }
 
   // Verify live Stripe session if configured
   if (tx.provider === 'STRIPE' && stripeClient && !tx.metadata?.mode) {
     const session = await stripeClient.checkout.sessions.retrieve(sessionId);
-    if (session.payment_status !== 'paid') {
-      throw new Error('Stripe payment has not been completed yet.');
+    if (session.payment_status !== 'paid' || (session.amount_total && session.amount_total < 200)) {
+      throw new Error('Stripe payment has not been completed or amount mismatch.');
     }
   }
 
-  tx.status = 'COMPLETED';
-  await tx.save();
+  // Atomic transition PENDING -> COMPLETED prevents race-condition double crediting
+  const claimed = await PaymentTransaction.findOneAndUpdate(
+    { _id: tx._id, status: 'PENDING' },
+    { $set: { status: 'COMPLETED' } },
+    { new: true }
+  );
+  if (!claimed) {
+    return { unlocked: 0, alreadyCompleted: true };
+  }
 
   await MonthlyUsage.updateOne(
     { userId: tx.userId, organizationId: tx.organizationId, month: tx.month },
@@ -281,4 +297,11 @@ export async function completePaymentAndUnlockQuota(sessionId: string): Promise<
   );
 
   return { unlocked: tx.tokensUnlocked, alreadyCompleted: false };
+}
+
+export function constructStripeWebhookEvent(rawBody: Buffer, signature: string) {
+  if (!stripeClient || !env.STRIPE_WEBHOOK_SECRET) {
+    throw new Error('Stripe webhook secret is not configured.');
+  }
+  return stripeClient.webhooks.constructEvent(rawBody, signature, env.STRIPE_WEBHOOK_SECRET);
 }

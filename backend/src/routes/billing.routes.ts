@@ -1,4 +1,5 @@
 import { Router } from 'express';
+import express from 'express';
 import { z } from 'zod';
 import { authenticate, type AuthRequest } from '../middleware/auth.js';
 import { validateBody } from '../middleware/validate.js';
@@ -10,6 +11,7 @@ import {
   getAvailableProviders,
   initiateExtraTokenCheckout,
   completePaymentAndUnlockQuota,
+  constructStripeWebhookEvent,
 } from '../services/paymentService.js';
 import { env } from '../config/env.js';
 
@@ -80,7 +82,7 @@ router.post('/checkout', authenticate, validateBody(checkoutSchema), async (req:
 const verifySchema = z.object({ sessionId: z.string().min(3) });
 router.post('/verify', authenticate, validateBody(verifySchema), async (req: AuthRequest, res, next) => {
   try {
-    const result = await completePaymentAndUnlockQuota(req.body.sessionId);
+    const result = await completePaymentAndUnlockQuota(req.body.sessionId, req.user!.userId);
     res.json({
       message: result.alreadyCompleted
         ? 'Payment already verified.'
@@ -88,7 +90,34 @@ router.post('/verify', authenticate, validateBody(verifySchema), async (req: Aut
       ...result,
     });
   } catch (err) {
+    const msg = (err as Error).message || '';
+    if (msg.startsWith('Forbidden:')) {
+      res.status(403).json({ error: msg, code: 'FORBIDDEN' });
+      return;
+    }
+    if (msg.includes('not been completed') || msg.includes('not found') || msg.includes('Sandbox')) {
+      res.status(400).json({ error: msg, code: 'PAYMENT_VERIFICATION_FAILED' });
+      return;
+    }
     next(err);
+  }
+});
+
+router.post('/webhook/stripe', express.raw({ type: 'application/json' }), async (req, res) => {
+  const sig = req.headers['stripe-signature'] as string | undefined;
+  if (!sig) {
+    res.status(400).json({ error: 'Missing stripe-signature header' });
+    return;
+  }
+  try {
+    const event = constructStripeWebhookEvent(req.body as Buffer, sig);
+    if (event.type === 'checkout.session.completed') {
+      const session = event.data.object as { id: string };
+      await completePaymentAndUnlockQuota(session.id);
+    }
+    res.json({ received: true });
+  } catch (err) {
+    res.status(400).json({ error: (err as Error).message || 'Webhook verification failed' });
   }
 });
 
