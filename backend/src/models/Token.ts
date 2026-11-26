@@ -13,6 +13,7 @@ export type TokenStatus =
 
 export interface IToken extends Document {
   organizationId: mongoose.Types.ObjectId;
+  branchId?: mongoose.Types.ObjectId;
   serviceId: mongoose.Types.ObjectId;
   userId?: mongoose.Types.ObjectId;
   counterId?: mongoose.Types.ObjectId;
@@ -45,6 +46,7 @@ export interface IToken extends Document {
 const tokenSchema = new Schema<IToken>(
   {
     organizationId: { type: Schema.Types.ObjectId, ref: 'Organization', required: true, index: true },
+    branchId: { type: Schema.Types.ObjectId, ref: 'Branch', index: true },
     serviceId: { type: Schema.Types.ObjectId, ref: 'Service', required: true, index: true },
     userId: { type: Schema.Types.ObjectId, ref: 'User', index: true },
     counterId: { type: Schema.Types.ObjectId, ref: 'Counter', index: true },
