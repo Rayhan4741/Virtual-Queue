@@ -70,10 +70,11 @@ export default function LandingPage() {
                     Get a Token <ArrowRight className="h-4 w-4" />
                   </Button>
                 </Link>
-                <Link href="/organizations">
-                  <Button variant="outline" size="lg" className="border-slate-700 bg-slate-900 text-white hover:bg-slate-800">
-                    Explore Organizations
-                  </Button>
+                <Link
+                  href="/organizations"
+                  className="inline-flex items-center justify-center gap-2 rounded-lg border border-slate-700 bg-slate-900 px-6 py-3 text-base font-semibold text-white transition-colors hover:bg-slate-800 hover:border-slate-600 focus:outline-none focus:ring-2 focus:ring-slate-500 focus:ring-offset-2 focus:ring-offset-slate-950"
+                >
+                  Explore Organizations
                 </Link>
               </div>
             </div>
