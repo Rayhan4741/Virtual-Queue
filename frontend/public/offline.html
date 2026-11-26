@@ -1,0 +1,22 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Offline — Virtual Queue</title>
+    <style>
+      body { font-family: system-ui, sans-serif; background: #f8fafc; color: #0f172a; display: flex; align-items: center; justify-content: center; min-height: 100vh; margin: 0; padding: 1rem; }
+      .card { background: white; border: 1px solid #e2e8f0; border-radius: 12px; padding: 2rem; max-width: 420px; text-align: center; box-shadow: 0 4px 12px rgba(15,23,42,0.06); }
+      h1 { font-size: 1.25rem; margin-bottom: 0.5rem; }
+      p { color: #475569; font-size: 0.95rem; line-height: 1.5; }
+      button { margin-top: 1rem; background: #0f172a; color: white; border: 0; border-radius: 8px; padding: 0.65rem 1.25rem; font-weight: 600; cursor: pointer; }
+    </style>
+  </head>
+  <body>
+    <div class="card">
+      <h1>You are currently offline</h1>
+      <p>Virtual Queue requires an internet connection to issue or update live queue tokens. No new tokens can be confirmed while offline.</p>
+      <button onclick="window.location.reload()">Retry Connection</button>
+    </div>
+  </body>
+</html>

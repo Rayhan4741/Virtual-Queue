@@ -1,0 +1,23 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  body {
+    @apply bg-slate-50 text-slate-900 antialiased;
+  }
+}
+
+.lite-mode *,
+.lite-mode *::before,
+.lite-mode *::after {
+  animation-duration: 0.001ms !important;
+  transition-duration: 0.001ms !important;
+  box-shadow: none !important;
+}
+
+@media print {
+  .no-print {
+    display: none !important;
+  }
+}
