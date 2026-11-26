@@ -280,6 +280,62 @@ export async function completePaymentAndUnlockQuota(
     }
   }
 
+  // Verify SSLCommerz transaction via Validation API when live/sandbox store credentials are active
+  if (
+    tx.provider === 'SSLCOMMERZ' &&
+    env.SSLCOMMERZ_STORE_ID &&
+    env.SSLCOMMERZ_STORE_PASSWORD &&
+    tx.metadata?.mode !== 'sandbox_simulation'
+  ) {
+    const valBase =
+      env.SSLCOMMERZ_IS_SANDBOX === 'true'
+        ? 'https://sandbox.sslcommerz.com/validator/api/validationserverAPI.php'
+        : 'https://securepay.sslcommerz.com/validator/api/validationserverAPI.php';
+    const valUrl = `${valBase}?tran_id=${encodeURIComponent(sessionId)}&store_id=${encodeURIComponent(
+      env.SSLCOMMERZ_STORE_ID
+    )}&store_passwd=${encodeURIComponent(env.SSLCOMMERZ_STORE_PASSWORD)}&format=json`;
+    const valRes = await fetch(valUrl, { signal: AbortSignal.timeout(8000) });
+    const valJson = (await valRes.json()) as { status?: string; amount?: string };
+    const statusOk = valJson.status === 'VALID' || valJson.status === 'VALIDATED';
+    if (!statusOk || Number(valJson.amount || 0) < tx.amount) {
+      throw new Error('SSLCommerz server-side validation failed.');
+    }
+  }
+
+  // Execute & verify bKash payment when live/sandbox merchant credentials are active
+  if (
+    tx.provider === 'BKASH' &&
+    env.BKASH_APP_KEY &&
+    env.BKASH_APP_SECRET &&
+    tx.metadata?.mode !== 'sandbox_simulation'
+  ) {
+    const base =
+      env.BKASH_IS_SANDBOX === 'true'
+        ? 'https://tokenized.sandbox.bka.sh/v1.2.0-beta'
+        : 'https://tokenized.pay.bka.sh/v1.2.0-beta';
+    const tokenRes = await fetch(`${base}/tokenized/checkout/token/grant`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', username: env.BKASH_USERNAME, password: env.BKASH_PASSWORD },
+      body: JSON.stringify({ app_key: env.BKASH_APP_KEY, app_secret: env.BKASH_APP_SECRET }),
+    });
+    const tokenJson = (await tokenRes.json()) as { id_token?: string };
+    if (!tokenJson.id_token) throw new Error('bKash token grant failed during verification.');
+
+    const execRes = await fetch(`${base}/tokenized/checkout/execute`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        authorization: tokenJson.id_token,
+        'x-app-key': env.BKASH_APP_KEY,
+      },
+      body: JSON.stringify({ paymentID: sessionId }),
+    });
+    const execJson = (await execRes.json()) as { transactionStatus?: string; amount?: string };
+    if (execJson.transactionStatus !== 'Completed' || Number(execJson.amount || 0) < tx.amount) {
+      throw new Error('bKash payment execution/verification failed.');
+    }
+  }
+
   // Atomic transition PENDING -> COMPLETED prevents race-condition double crediting
   const claimed = await PaymentTransaction.findOneAndUpdate(
     { _id: tx._id, status: 'PENDING' },
