@@ -6,6 +6,7 @@ export interface IMonthlyUsage extends Document {
   month: string; // YYYY-MM
   remoteUsed: number;
   paidExtraQuota: number;
+  fulfilledTransactionIds: mongoose.Types.ObjectId[];
   strikes: number;
   updatedAt: Date;
 }
@@ -17,6 +18,7 @@ const monthlyUsageSchema = new Schema<IMonthlyUsage>(
     month: { type: String, required: true },
     remoteUsed: { type: Number, default: 0, min: 0 },
     paidExtraQuota: { type: Number, default: 0, min: 0 },
+    fulfilledTransactionIds: [{ type: Schema.Types.ObjectId, ref: 'PaymentTransaction' }],
     strikes: { type: Number, default: 0, min: 0 },
   },
   { timestamps: true }

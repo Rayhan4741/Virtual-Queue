@@ -102,5 +102,28 @@ describe('Quota & Multi-Gateway Billing (Stripe / SSLCommerz / bKash)', () => {
 
     const afterUsage = await MonthlyUsage.findOne({ organizationId: orgId, month }).lean();
     expect(afterUsage?.paidExtraQuota).toBe(beforeQuota + 5);
+
+    // Crash after MonthlyUsage increment but before quotaFulfilled=true -> must NOT double-credit
+    const halfCrashedTx = await PaymentTransaction.create({
+      userId: custRes.body.user.id,
+      organizationId: orgId,
+      provider: 'STRIPE',
+      providerSessionId: `cs_half_crash_${Date.now()}`,
+      amount: 2,
+      currency: 'USD',
+      tokensUnlocked: 5,
+      month,
+      status: 'COMPLETED',
+      quotaFulfilled: false,
+    });
+    await MonthlyUsage.updateOne(
+      { organizationId: orgId, userId: custRes.body.user.id, month },
+      { $inc: { paidExtraQuota: 5 }, $push: { fulfilledTransactionIds: halfCrashedTx._id } }
+    );
+    await recoverPendingQuotaFulfillments();
+    const afterHalfCrash = await MonthlyUsage.findOne({ organizationId: orgId, month }).lean();
+    expect(afterHalfCrash?.paidExtraQuota).toBe(beforeQuota + 10);
+    const updatedHalfTx = await PaymentTransaction.findById(halfCrashedTx._id).lean();
+    expect(updatedHalfTx?.quotaFulfilled).toBe(true);
   });
 });

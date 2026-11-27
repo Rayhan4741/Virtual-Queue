@@ -391,7 +391,7 @@ export default function AdminDashboard() {
             </CardBody>
           </Card>
           <Card>
-            <CardHeader title="Counter Efficiency & Avg Service Duration (min)" />
+            <CardHeader title="Counter Throughput (Served) & Avg Service Duration (min)" />
             <CardBody className="h-72">
               <ResponsiveContainer width="100%" height="100%">
                 <BarChart data={analyticsData.analytics.counterUtilization ?? []}>

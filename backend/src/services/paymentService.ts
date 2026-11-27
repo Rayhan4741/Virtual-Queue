@@ -356,28 +356,31 @@ export async function completePaymentAndUnlockQuota(
 }
 
 /**
- * Atomically fulfills monthly quota for a COMPLETED transaction.
- * Rolls back quotaFulfilled=false if MonthlyUsage update fails so recovery can safely retry.
+ * Crash-safe idempotent quota fulfillment for a COMPLETED transaction.
+ * Records tx._id in MonthlyUsage.fulfilledTransactionIds before marking quotaFulfilled=true,
+ * so a crash at any point can be safely retried without double-crediting.
  */
 export async function fulfillQuotaForTransaction(txId: unknown): Promise<boolean> {
-  const claimed = await PaymentTransaction.findOneAndUpdate(
-    { _id: txId, status: 'COMPLETED', quotaFulfilled: false },
-    { $set: { quotaFulfilled: true, quotaFulfilledAt: new Date() } },
-    { new: true }
-  );
-  if (!claimed) return false;
+  const tx = await PaymentTransaction.findOne({ _id: txId, status: 'COMPLETED', quotaFulfilled: false }).lean();
+  if (!tx) return false;
 
-  try {
-    await MonthlyUsage.updateOne(
-      { userId: claimed.userId, organizationId: claimed.organizationId, month: claimed.month },
-      { $inc: { paidExtraQuota: claimed.tokensUnlocked } },
-      { upsert: true }
-    );
-    return true;
-  } catch (err) {
-    await PaymentTransaction.updateOne({ _id: claimed._id }, { $set: { quotaFulfilled: false }, $unset: { quotaFulfilledAt: 1 } });
-    throw err;
-  }
+  const usage = await MonthlyUsage.findOneAndUpdate(
+    { userId: tx.userId, organizationId: tx.organizationId, month: tx.month },
+    { $setOnInsert: { userId: tx.userId, organizationId: tx.organizationId, month: tx.month } },
+    { upsert: true, new: true }
+  );
+
+  const creditRes = await MonthlyUsage.updateOne(
+    { _id: usage._id, fulfilledTransactionIds: { $ne: tx._id } },
+    { $inc: { paidExtraQuota: tx.tokensUnlocked }, $push: { fulfilledTransactionIds: tx._id } }
+  );
+
+  await PaymentTransaction.updateOne(
+    { _id: tx._id, quotaFulfilled: false },
+    { $set: { quotaFulfilled: true, quotaFulfilledAt: new Date() } }
+  );
+
+  return creditRes.modifiedCount > 0;
 }
 
 /**

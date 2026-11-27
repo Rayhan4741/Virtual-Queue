@@ -4,6 +4,8 @@ import { createAdapter } from '@socket.io/redis-adapter';
 import { Redis } from 'ioredis';
 import { env } from '../config/env.js';
 import { verifyAccessToken, type AccessTokenPayload } from '../utils/jwt.js';
+import { Counter } from '../models/Counter.js';
+import { Organization } from '../models/Organization.js';
 
 let io: Server | null = null;
 
@@ -62,12 +64,25 @@ export async function initSocketServer(httpServer: HttpServer): Promise<Server> 
       }
     });
 
-    socket.on('join:counter', (counterId: string) => {
+    socket.on('join:counter', async (counterId: string) => {
       if (!socket.user || (socket.user.role !== 'STAFF' && socket.user.role !== 'ADMIN')) {
         return; // Prevent unauthorized counter room subscriptions
       }
-      if (typeof counterId === 'string' && counterId.length > 0) {
-        socket.join(`counter:${counterId}`);
+      if (typeof counterId !== 'string' || counterId.length === 0) return;
+      try {
+        const counter = await Counter.findById(counterId).select('organizationId').lean();
+        if (!counter) return;
+        const orgId = counter.organizationId.toString();
+        if (socket.user.organizationId === orgId) {
+          socket.join(`counter:${counterId}`);
+          return;
+        }
+        if (socket.user.role === 'ADMIN') {
+          const ownsOrg = await Organization.exists({ _id: orgId, adminId: socket.user.userId });
+          if (ownsOrg) socket.join(`counter:${counterId}`);
+        }
+      } catch {
+        // Ignore malformed counterId
       }
     });
   });

@@ -6,6 +6,7 @@ import { createApp } from './app.js';
 import { initSocketServer } from './services/socketService.js';
 import { startCronJobs, stopCronJobs } from './services/cronService.js';
 import { recoverQueueStateOnStartup } from './services/tokenEngine.js';
+import { recoverPendingQuotaFulfillments } from './services/paymentService.js';
 import { seedIfEmpty } from './seed.js';
 
 async function main() {
@@ -13,7 +14,8 @@ async function main() {
   await initRedis();
   await seedIfEmpty();
   const recovery = await recoverQueueStateOnStartup();
-  console.log('[Recovery] Startup queue reconciliation:', recovery);
+  const recoveredPayments = await recoverPendingQuotaFulfillments();
+  console.log('[Recovery] Startup reconciliation:', { ...recovery, recoveredPayments });
 
   const app = createApp();
   const server = http.createServer(app);
