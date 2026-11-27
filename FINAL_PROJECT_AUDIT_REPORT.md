@@ -6,94 +6,74 @@
 
 ---
 
-## 1. Confirmed Fixes Implemented
+## 1. Confirmed Defects Fixed & Exact Source Files Changed
 
-1. **Socket.IO Counter Room Tenant Isolation (`backend/src/services/socketService.ts`):**
-   - **Defect Found:** `join:counter` previously checked only `role === 'STAFF' || 'ADMIN'` without verifying organization ownership, allowing a Staff/Admin from Org A to subscribe to Org B's `counter:{counterId}` room.
-   - **Fix:** `join:counter` now queries `Counter.findById(counterId).select('organizationId')` and verifies `socket.user.organizationId === orgId` (or `Organization.exists({ _id: orgId, adminId: socket.user.userId })` for `ADMIN`).
-2. **Crash-Safe Payment Sandbox Quota Recovery (`backend/src/models/MonthlyUsage.ts`, `PaymentTransaction.ts`, `paymentService.ts`, `index.ts`):**
-   - **Defect Found:** Previously `quotaFulfilled: true` was set *before* `MonthlyUsage.updateOne`, which could drop quota credits if a process crashed (`SIGKILL`) between the two writes.
-   - **Fix:** Added `fulfilledTransactionIds` idempotent ledger array to `MonthlyUsage`. `fulfillQuotaForTransaction()` atomically increments `paidExtraQuota` with `{ fulfilledTransactionIds: { $ne: tx._id } }` + `$push: { fulfilledTransactionIds: tx._id }`, and only then sets `PaymentTransaction.quotaFulfilled = true`. `recoverPendingQuotaFulfillments()` is invoked on server startup (`backend/src/index.ts`) and verified against mid-flight crash simulations (`billing.test.ts`).
-3. **Public `/api/health` vs Authenticated `/api/admin/system-status` (`health.routes.ts`, `admin.routes.ts`, `frontend/src/app/admin/page.tsx`):**
-   - **Defect Found:** Public `GET /api/health` exposed `instanceId`, `activeTier`, `memoryMb`, `socketConnections`, `errorRatePercent`, and `failedTokenRequests`.
-   - **Fix:** `GET /api/health` now returns only `{ status, database: { connected }, redis: { connected }, timestamp }`. Full operational metrics moved to `ADMIN`-authenticated `GET /api/admin/system-status` (`resilienceAndPrivacy.test.ts`).
-4. **Analytics Labeling Accuracy (`frontend/src/app/admin/page.tsx`):**
-   - Renamed `"Counter Efficiency & Avg Service Duration (min)"` to `"Counter Throughput (Served) & Avg Service Duration (min)"` because `analyticsService.ts` measures `ServiceLog` served counts and `durationSec` rather than busy-vs-available counter capacity percentage.
-5. **Feedback Validation (`backend/src/routes/token.routes.ts`):**
-   - Enforces token ownership (`token.userId === req.user.userId`), `COMPLETED`-only status (`400`), single-rating lock (`409 Conflict`), 1–5 rating bounds, 500-char comment limit, and `<`/`>` bracket stripping (`edgeCasesAndSocket.test.ts`).
-6. **Prior P0 Fixes Retained & Verified:** Cross-tenant `assertOrgAccess` / `assertCounterAccess` (`staff.routes.ts`, `organization.routes.ts`), atomic `callNextToken` / `processExpiredCalledTokens` claiming (`tokenEngine.ts`), and `retryWrites: true, w: 'majority'` (`db.ts`).
-
----
-
-## 2. Remaining Defects & Known Architectural Limitations
-
-1. **PSS Application-Level URI Failover vs Real Replica Set:** `backend/src/config/db.ts` switches across `MONGODB_URI` → `MONGODB_SECONDARY_URI` → `MONGODB_SECONDARY_2_URI`. Application-level URI switching does **not** replicate data between independent standalone MongoDB servers (see Section 5).
-2. **Overall Service-Layer Coverage Below 70%:** Overall backend statement coverage is `52.97%` (core `tokenEngine.ts` `74.72%`, `etaService.ts` `89.32%`, `scheduleService.ts` `89.83%`, `qrService.ts` `81.25%`, `auditService.ts` `100%`; `cronService.ts`, `aiAssistantService.ts`, `travelService.ts`, and `analyticsService.ts` remain low/untested in unit/integration suites).
-3. **AuditLog DB-Level Immutability:** Mongoose hooks block application-level `update`/`delete`, but cannot stop a privileged MongoDB admin from modifying `auditlogs` directly; production requires `insert`/`find`-only MongoDB RBAC permissions.
-4. **Organization-Specific Timezone Config:** `timezone.ts` currently centers on `Asia/Dhaka`; per-organization configurable timezones are not yet in the `Organization` schema.
+1. **[P0] Socket.IO Public Room PII Leak (`backend/src/services/socketService.ts`):**
+   - **Defect Found:** `emitQueueEvent` emitted raw `Token` documents containing `guestName`, `guestPhone`, `userId`, `trackingCode`, and `ratingComment` to public `organization:*` and `service:*` rooms.
+   - **Fix:** Added `sanitizePublicTokenPayload()` in `socketService.ts` to strip `guestName`, `guestPhone`, `userId`, `trackingCode`, and `ratingComment` on all `organization:*` and `service:*` broadcasts while preserving full payloads for authenticated `user:*` / `counter:*` rooms.
+2. **[P0] Socket.IO `join:counter` Tenant Isolation (`backend/src/services/socketService.ts`):**
+   - **Defect Found:** `join:counter` previously checked only `role === 'STAFF' || 'ADMIN'` without checking organization ownership.
+   - **Fix:** Verified counter ownership (`socket.user.organizationId === orgId` or `Organization.exists({ _id: orgId, adminId: socket.user.userId })`) before joining `counter:{counterId}`.
+3. **[P0] Payment Sandbox `MonthlyUsage` Zero-Match Silent Quota Loss (`backend/src/models/MonthlyUsage.ts`, `backend/src/services/paymentService.ts`, `backend/src/index.ts`):**
+   - **Defect Found:** `fulfillQuotaForTransaction()` previously marked `quotaFulfilled = true` unconditionally even if `MonthlyUsage.updateOne` matched `0` documents.
+   - **Fix:** Added `fulfilledTransactionIds` idempotent ledger array to `MonthlyUsage`; `fulfillQuotaForTransaction()` now checks `creditRes.matchedCount === 0`, verifies `MonthlyUsage.exists({ _id: usage._id, fulfilledTransactionIds: tx._id })`, throws if not recorded (leaving `quotaFulfilled: false` for retry), and runs `recoverPendingQuotaFulfillments()` on startup.
+4. **[P1] Public `/api/health` vs Authenticated `/api/admin/system-status` (`backend/src/routes/health.routes.ts`, `backend/src/routes/admin.routes.ts`, `frontend/src/app/admin/page.tsx`):**
+   - Public `GET /api/health` restricted to `{ status, database: { connected }, redis: { connected }, timestamp }`; full metrics moved to `ADMIN`-only `GET /api/admin/system-status`.
+5. **[P1] Analytics Labeling Accuracy (`frontend/src/app/admin/page.tsx`):**
+   - Renamed `"Counter Efficiency"` to `"Counter Throughput (Served) & Avg Service Duration (min)"` to match `ServiceLog` aggregations.
+6. **[P1] Feedback Validation (`backend/src/routes/token.routes.ts`):**
+   - Enforces token ownership, `COMPLETED`-only status, single-rating lock (`409 Conflict`), 1–5 bounds, 500-char limit, and `<`/`>` stripping.
 
 ---
 
-## 3. Actual Test Commands & Observed Results
+## 2. Tests Added
+
+- `backend/src/__tests__/integration/socketAndCron.test.ts`: Tests `sanitizePublicTokenPayload`, public vs private `emitQueueEvent` room filtering, `cronService` start/stop, and `analyticsService` (`getAdminDashboardSummary`, `getAdminAnalytics`) against real `Token` (`COMPLETED`, `CANCELLED`, `NO_SHOW`) and `ServiceLog` documents.
+- `backend/src/__tests__/integration/paymentAndRecoveryEdgeCases.test.ts`: Tests `MonthlyUsage` zero-match error guard (ensuring `quotaFulfilled` stays `false` for retry), concurrent `completePaymentAndUnlockQuota` idempotency, ownership `Forbidden:` rejection, simultaneous `recoverQueueStateOnStartup()` healing orphaned counters while preserving `SERVING` tokens, and multi-country timezone scheduling (`America/New_York` vs `Asia/Dhaka`).
+- `backend/src/__tests__/integration/edgeCasesAndSocket.test.ts`: Tests simultaneous `call-next`, `transfer`, multi-instance `processExpiredCalledTokens` race, and rating `409`/XSS rules.
+- `backend/src/__tests__/integration/billing.test.ts`, `resilienceAndPrivacy.test.ts`, `disasterRecovery.test.ts`, `pssFailover.test.ts`, `scheduleService.test.ts`.
+
+---
+
+## 3. Actual Test Execution Results
 
 - **`npm run typecheck`** (`backend` + `frontend` `tsc --noEmit`): **Passed (0 errors)**.
 - **`npm run build`** (`backend` `tsc -p tsconfig.json` + `frontend` `next build`): **Passed (0 errors, 16/16 Next.js routes built)**.
 - **`npm run test:coverage --workspace=backend`** (Vitest v2.1.9 + Supertest + `MongoMemoryServer`):
-  - **Observed Result:** **17 test files passed (17), 26 tests passed (26), 0 failed** (Duration: `15.68s`):
-    - **Unit (7 files, 15 tests):** `envValidation.test.ts` (2), `qrService.test.ts` (3), `etaService.test.ts` (2), `stateMachine.test.ts` (2), `queueOrdering.test.ts` (2), `scheduleService.test.ts` (2), `timezone.test.ts` (2).
-    - **Integration (10 files, 11 tests):** `concurrency.test.ts` (1 — 100 concurrent tokens, 0 duplicates), `authAndSecurity.test.ts` (1), `disasterRecovery.test.ts` (1), `faultTolerance.test.ts` (1 — 2 stateless instances without Redis), `resilienceAndPrivacy.test.ts` (1), `edgeCasesAndSocket.test.ts` (1 — simultaneous `call-next`, token transfer, multi-instance no-show cron race, rating `409` & XSS strip), `tokenLifecycle.test.ts` (1), `securityAudit.test.ts` (1), `billing.test.ts` (1 — quota + mid-flight crash recovery), `pssFailover.test.ts` (2 — unreachable Primary → Secondary 1 → Secondary 2).
+  - **Observed Result:** **19 test files passed (19), 30 tests passed (30), 0 failed** (Duration: `15.52s`).
 
 ---
 
-## 4. Coverage Results (Observed `v8` Output)
+## 4. Updated Coverage Results (Observed `v8` Output)
 
-- **Overall (`All files`):** **52.97% Stmts | 50.2% Branch | 73.33% Funcs | 52.97% Lines**
+- **Overall (`All files`):** **64.18% Stmts | 53.02% Branch | 82.25% Funcs | 64.18% Lines**
 - **Middleware:** **70.21% Stmts | 44% Branch | 80% Funcs** (`rateLimiter.ts` 100%, `auth.ts` 63.15%, `errorHandler.ts` 63.15%, `validate.ts` 53.33%)
-- **Services:** **52.05% Stmts | 50.9% Branch | 72.72% Funcs**
+- **Services (`63.86%` Stmts | `53.9%` Branch | `82.45%` Funcs):**
+  - `analyticsService.ts`: **100%** Stmts / **100%** Funcs
   - `auditService.ts`: **100%** Stmts / **100%** Funcs
   - `scheduleService.ts`: **89.83%** Stmts / **100%** Funcs
   - `etaService.ts`: **89.32%** Stmts / **100%** Funcs
   - `metricsService.ts`: **86.95%** Stmts
   - `qrService.ts`: **81.25%** Stmts / **100%** Funcs
   - `tokenEngine.ts`: **74.72%** Stmts / **90.47%** Funcs
+  - `socketService.ts`: **54.63%** Stmts / **100%** Funcs
   - `notificationService.ts`: **50.66%** Stmts
-  - `paymentService.ts`: **40.11%** Stmts / **66.66%** Funcs (live Stripe/SSLCommerz/bKash HTTP branches unexercised in offline test)
-  - `socketService.ts`: **12.94%** Stmts (tested at unit/app level; live WebSocket client tests not executed)
-  - `analyticsService.ts` (`0.79%`), `aiAssistantService.ts` (`0.89%`), `travelService.ts` (`2.04%`), `cronService.ts` (`0%`)
+  - `paymentService.ts`: **49.11%** Stmts / **83.33%** Funcs (live external HTTP branches not executed offline)
+  - `cronService.ts`: **31.7%** Stmts / **100%** Funcs
+  - `aiAssistantService.ts` (`0.89%`), `travelService.ts` (`2.04%`)
 
 ---
 
-## 5. Database Topology & Failover Limitations
+## 5. Remaining Architectural Limitations & Database Topology
 
-- **Actual Topology:** `backend/src/config/db.ts` implements ordered application-level connection fallback (`PRIMARY` → `SECONDARY_1` → `SECONDARY_2`) with `retryWrites: true` and `w: 'majority'`.
-- **Critical Limitation:** If the 3 URIs point to **separate standalone MongoDB deployments**, there is **no replication**, creating stale-read, lost-write, and split-brain risks upon failback. True PSS automatic primary election and replication **require** `MONGODB_URI` to point to a **single MongoDB Replica Set** (e.g., MongoDB Atlas `mongodb+srv://...` or `mongodb://host1,host2,host3/?replicaSet=rs0`).
-- **Verification Boundary:** `pssFailover.test.ts` verifies URI failover order against `MongoMemoryServer` and refused ports; **live MongoDB Atlas Replica Set primary-stepdown and failback were NOT tested locally**.
-
----
-
-## 6. Payment Sandbox Limitations
-
-- Stripe, SSLCommerz, and bKash are **educational sandbox integrations**, not production-certified merchant implementations.
-- `billing.test.ts` and `securityAudit.test.ts` verify checkout creation, ownership enforcement (`403`), parallel idempotency, and crash recovery (`PaymentTransaction.quotaFulfilled` + `MonthlyUsage.fulfilledTransactionIds`).
-- Live merchant callbacks/webhooks over public HTTPS (bKash grant/execute, SSLCommerz validator API, live Stripe webhook delivery) are **NOT TESTED** locally.
+- **PSS Database Architecture (`backend/src/config/db.ts`):** The 3 configured URIs (`MONGODB_URI`, `MONGODB_SECONDARY_URI`, `MONGODB_SECONDARY_2_URI`) represent separate connection targets unless pointed at the same replica set. Application-level URI switching does **not** replicate data between independent standalone MongoDB servers and introduces split-brain/stale-write risks on failback. Production deployments **must** point `MONGODB_URI` to a **single MongoDB Replica Set** (`mongodb+srv://...` or replica-set seed list) with `retryWrites: true, w: 'majority'`.
+- **Payment Scope:** Stripe, SSLCommerz, and bKash remain educational sandbox integrations.
+- **AuditLog DB-Level Immutability:** Mongoose hooks protect against app-level mutations; production requires `insert`/`find`-only MongoDB RBAC permissions.
+- **Multi-Country Timezone:** `Organization` supports configurable `timezone` (default `Asia/Dhaka`), `workingHours`, `holidays`, and UTC storage via `Intl.DateTimeFormat` (`scheduleService.ts`).
 
 ---
 
-## 7. Tenant Isolation Results
-
-- **HTTP Routes:** `admin.routes.ts` scopes all queries/mutations via `resolveAdminOrgId` (`adminId: req.user.userId`) and counter/staff ownership checks; `staff.routes.ts` enforces `assertOrgAccess` / `assertCounterAccess`; `token.routes.ts` enforces `token.userId === req.user.userId`; `billing.routes.ts` enforces `tx.userId === req.user.userId`. Verified via `authAndSecurity.test.ts` and `securityAudit.test.ts`.
-- **Socket.IO:** `join:counter` now validates counter ownership/organization membership (`socketService.ts`). Public `join:organization` and `join:service` remain intentionally readable for public display boards and customer queue tracking.
-
----
-
-## 8. Deployment Verification Results
-
-- **Inspected Configs:** `infra/docker-compose.yml` (Nginx LB + 2 backend instances + Redis + MongoDB), `infra/nginx/nginx.conf` (`ip_hash` sticky sessions, `/socket.io/` WebSocket upgrade, `/api/` failover), `backend/src/index.ts` (graceful `SIGTERM`/`SIGINT` draining), and `docs/BACKUP_AND_RECOVERY.md`.
-- **Local Execution Check:** `docker info` failed (`//./pipe/dockerDesktopLinuxEngine` not running) and `k6` is not installed on this Windows host.
-
----
-
-## 9. Explicit NOT TESTED Items
+## 6. Explicit NOT TESTED Items
 
 1. Multi-container `infra/docker-compose.yml` + Nginx `ip_hash` live run (Docker Desktop daemon not running).
 2. `infra/k6/load-test.js` 500–1,000 VU load test (`k6` binary not installed).
@@ -103,8 +83,8 @@
 
 ---
 
-## 10. Final Readiness Verdict
+## 7. Final Readiness Status
 
 **Status: `STAGING READY`**
 
-All 17 automated test suites (26 tests), TypeScript checks, Next.js/Express production builds, tenant isolation fixes, and crash-safe payment/token recovery logic pass locally. **Do not declare `PRODUCTION READY`** until the platform is deployed to a staging environment with a real MongoDB Replica Set, Docker/Nginx multi-instance verification, `k6` load testing, and a live Atlas backup restore drill.
+All 19 automated test suites (30 tests), TypeScript checks, Next.js/Express builds, Socket.IO room privacy/isolation fixes, and crash-safe payment/token recovery logic pass locally. **Not `PRODUCTION READY`** until verified in a staging environment with a real MongoDB Replica Set, Docker/Nginx multi-instance run, `k6` load testing, and a live Atlas backup restore drill.

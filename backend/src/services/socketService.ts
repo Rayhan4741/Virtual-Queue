@@ -94,6 +94,20 @@ export function getIO(): Server | null {
   return io;
 }
 
+export function sanitizePublicTokenPayload(payload: Record<string, unknown>): Record<string, unknown> {
+  if (!payload.token || typeof payload.token !== 'object') return payload;
+  const raw =
+    typeof (payload.token as { toObject?: () => Record<string, unknown> }).toObject === 'function'
+      ? (payload.token as { toObject: () => Record<string, unknown> }).toObject()
+      : { ...(payload.token as Record<string, unknown>) };
+  delete raw.guestName;
+  delete raw.guestPhone;
+  delete raw.userId;
+  delete raw.trackingCode;
+  delete raw.ratingComment;
+  return { ...payload, token: raw };
+}
+
 export function emitQueueEvent(
   event:
     | 'token:created'
@@ -110,7 +124,10 @@ export function emitQueueEvent(
   payload: Record<string, unknown>
 ): void {
   if (!io) return;
+  const emittedAt = new Date().toISOString();
+  const publicPayload = sanitizePublicTokenPayload(payload);
   for (const room of rooms) {
-    io.to(room).emit(event, { ...payload, emittedAt: new Date().toISOString() });
+    const isPublicRoom = room.startsWith('organization:') || room.startsWith('service:');
+    io.to(room).emit(event, { ...(isPublicRoom ? publicPayload : payload), emittedAt });
   }
 }

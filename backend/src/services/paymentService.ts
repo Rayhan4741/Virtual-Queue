@@ -375,6 +375,13 @@ export async function fulfillQuotaForTransaction(txId: unknown): Promise<boolean
     { $inc: { paidExtraQuota: tx.tokensUnlocked }, $push: { fulfilledTransactionIds: tx._id } }
   );
 
+  if (creditRes.matchedCount === 0) {
+    const alreadyRecorded = await MonthlyUsage.exists({ _id: usage._id, fulfilledTransactionIds: tx._id });
+    if (!alreadyRecorded) {
+      throw new Error('Quota fulfillment failed: MonthlyUsage record could not be updated.');
+    }
+  }
+
   await PaymentTransaction.updateOne(
     { _id: tx._id, quotaFulfilled: false },
     { $set: { quotaFulfilled: true, quotaFulfilledAt: new Date() } }
