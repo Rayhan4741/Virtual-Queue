@@ -19,6 +19,21 @@ const mailTransporter =
       })
     : null;
 
+async function withRetry<T>(fn: () => Promise<T>, maxRetries = 2): Promise<T> {
+  let lastErr: unknown;
+  for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    try {
+      return await fn();
+    } catch (err) {
+      lastErr = err;
+      if (attempt < maxRetries) {
+        await new Promise((r) => setTimeout(r, 200 * (attempt + 1)));
+      }
+    }
+  }
+  throw lastErr;
+}
+
 export interface SendNotificationInput {
   userId: string;
   tokenId?: string;
@@ -71,16 +86,16 @@ export async function sendNotification(input: SendNotificationInput): Promise<vo
       }
     }
 
-    // Email (if configured and user has email)
+    // Email (if configured and user has email, with retry)
     if (user.notificationPreferences?.email !== false && mailTransporter && user.email) {
-      mailTransporter
-        .sendMail({
+      withRetry(() =>
+        mailTransporter.sendMail({
           from: env.SMTP_FROM,
           to: user.email,
           subject: `[Virtual Queue] ${input.title}`,
           text: input.message,
         })
-        .catch(() => {});
+      ).catch(() => {});
     }
   } catch (err) {
     console.warn('[Notification] Dispatch warning:', (err as Error).message);

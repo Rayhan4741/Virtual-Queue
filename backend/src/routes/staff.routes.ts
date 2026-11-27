@@ -79,7 +79,11 @@ router.get('/queue', async (req: AuthRequest, res, next) => {
       counter,
       currentToken,
       waitingQueue: sortedWaiting,
-      stats: { servedToday: todayLogs.length, avgDurationSec },
+      stats: {
+        servedToday: todayLogs.length,
+        avgDurationSec,
+        overloaded: sortedWaiting.length >= 10,
+      },
     });
   } catch (err) {
     next(err);
@@ -207,11 +211,21 @@ router.post('/transfer', validateBody(transferSchema), async (req: AuthRequest, 
 router.post('/counter/pause', validateBody(counterActionSchema), async (req: AuthRequest, res, next) => {
   try {
     await assertCounterAccess(req.body.counterId, req.user!);
-    const counter = await Counter.findByIdAndUpdate(req.body.counterId, { status: 'PAUSED' }, { new: true });
+    const counter = await Counter.findById(req.body.counterId);
     if (!counter) {
       res.status(404).json({ error: 'Counter not found' });
       return;
     }
+    // Release any stranded CALLED/SERVING token back to CHECKED_IN when counter pauses/fails
+    if (counter.currentTokenId) {
+      await Token.updateOne(
+        { _id: counter.currentTokenId, status: { $in: ['CALLED', 'SERVING'] } },
+        { $set: { status: 'CHECKED_IN' }, $unset: { counterId: 1, calledAt: 1, servingStartedAt: 1 } }
+      );
+      counter.currentTokenId = null;
+    }
+    counter.status = 'PAUSED';
+    await counter.save();
     await recordAuditLog({
       organizationId: counter.organizationId,
       actorId: req.user!.userId,

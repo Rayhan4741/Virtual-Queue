@@ -10,6 +10,8 @@ import { ServiceLog } from '../models/ServiceLog.js';
 import { getRedisClient, isRedisAvailable } from '../config/redis.js';
 import { updateEmaServiceTime } from './etaService.js';
 import { recordAuditLog } from './auditService.js';
+import { checkOrganizationSchedule } from './scheduleService.js';
+import { metrics } from './metricsService.js';
 
 export class QueueEngineError extends Error {
   statusCode: number;
@@ -190,8 +192,22 @@ export async function issueToken(input: IssueTokenInput): Promise<IToken> {
     throw new QueueEngineError('Remote booking is disabled for this service.', 400, 'REMOTE_DISABLED');
   }
 
-  const org = await Organization.findById(input.organizationId).select('timezone').lean();
-  const tz = org?.timezone || 'Asia/Dhaka';
+  const org = await Organization.findById(input.organizationId).select('timezone workingHours holidays enforceWorkingHours status').lean();
+  if (!org || org.status !== 'ACTIVE') {
+    metrics.recordTokenFailure();
+    throw new QueueEngineError('Organization is not active.', 400, 'ORG_INACTIVE');
+  }
+  const schedule = checkOrganizationSchedule({
+    timezone: org.timezone || 'Asia/Dhaka',
+    workingHours: org.workingHours || { open: '09:00', close: '17:00', days: ['Sun', 'Mon', 'Tue', 'Wed', 'Thu'] },
+    holidays: org.holidays || [],
+    enforceWorkingHours: Boolean(org.enforceWorkingHours),
+  });
+  if (!schedule.open) {
+    metrics.recordTokenFailure();
+    throw new QueueEngineError(schedule.reason || 'Organization is currently closed.', 400, 'OUTSIDE_WORKING_HOURS');
+  }
+  const tz = org.timezone || 'Asia/Dhaka';
   const queueDate = getTodayDateString(tz);
   const month = getCurrentMonthString(tz);
 
@@ -240,7 +256,7 @@ export async function issueToken(input: IssueTokenInput): Promise<IToken> {
     const seq = await getNextTokenSequence(input.serviceId, queueDate);
     const prefix = (service.codePrefix || 'A').toUpperCase();
     const tokenNumber = `${prefix}-${String(100 + seq)}`;
-    const trackingCode = crypto.randomBytes(6).toString('hex').toUpperCase();
+    const trackingCode = crypto.randomBytes(8).toString('hex').toUpperCase();
 
     // Kiosk/Guest/Staff walk-ins are physically on-site so they start CHECKED_IN
     const initialStatus: TokenStatus = input.source === 'REMOTE' ? 'WAITING' : 'CHECKED_IN';
@@ -754,4 +770,61 @@ export async function processExpiredCalledTokens(graceMinutes = 3): Promise<ITok
     updated.push(claimed);
   }
   return updated;
+}
+
+/**
+ * Startup Queue & Counter State Reconciliation:
+ * Heals partial-write inconsistencies after an unexpected server crash or Redis restart.
+ */
+export async function recoverQueueStateOnStartup(): Promise<{
+  healedCounters: number;
+  relinkedTokens: number;
+  syncedRedisCounters: number;
+}> {
+  let healedCounters = 0;
+  let relinkedTokens = 0;
+  let syncedRedisCounters = 0;
+
+  // 1. Clear counters whose currentTokenId already reached a terminal state
+  const busyCounters = await Counter.find({ currentTokenId: { $ne: null } });
+  for (const counter of busyCounters) {
+    const token = await Token.findById(counter.currentTokenId).select('status').lean();
+    if (!token || ['COMPLETED', 'CANCELLED', 'NO_SHOW', 'SKIPPED'].includes(token.status)) {
+      counter.currentTokenId = null;
+      await counter.save();
+      healedCounters += 1;
+    }
+  }
+
+  // 2. Re-link active CALLED/SERVING tokens whose counter lost currentTokenId
+  const activeServingTokens = await Token.find({
+    status: { $in: ['CALLED', 'SERVING'] },
+    counterId: { $ne: null },
+  })
+    .select('_id counterId')
+    .lean();
+
+  for (const t of activeServingTokens) {
+    const res = await Counter.updateOne(
+      { _id: t.counterId, currentTokenId: null },
+      { $set: { currentTokenId: t._id } }
+    );
+    if (res.modifiedCount > 0) relinkedTokens += 1;
+  }
+
+  // 3. Warm/reconcile Redis sequence counters from MongoDB TokenCounter for today
+  if (isRedisAvailable()) {
+    const redis = getRedisClient()!;
+    const todayCounters = await TokenCounter.find({}).sort({ date: -1 }).limit(200).lean();
+    for (const tc of todayCounters) {
+      const key = `vq:counter:${tc.serviceId.toString()}:${tc.date}`;
+      const currentVal = Number((await redis.get(key)) || 0);
+      if (tc.sequence > currentVal) {
+        await redis.set(key, tc.sequence, 'EX', 60 * 60 * 48);
+        syncedRedisCounters += 1;
+      }
+    }
+  }
+
+  return { healedCounters, relinkedTokens, syncedRedisCounters };
 }

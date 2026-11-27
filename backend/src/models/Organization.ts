@@ -10,6 +10,8 @@ export interface IOrganization extends Document {
   description?: string;
   timezone: string;
   plan: SubscriptionPlan;
+  holidays: string[];
+  enforceWorkingHours: boolean;
   location: {
     address: string;
     city: string;
@@ -40,6 +42,8 @@ const organizationSchema = new Schema<IOrganization>(
     description: { type: String, trim: true, maxlength: 500 },
     timezone: { type: String, default: 'Asia/Dhaka' },
     plan: { type: String, enum: ['FREE', 'PRO', 'ENTERPRISE'], default: 'FREE' },
+    holidays: { type: [String], default: [] },
+    enforceWorkingHours: { type: Boolean, default: false },
     location: {
       address: { type: String, required: true, trim: true },
       city: { type: String, required: true, trim: true, index: true },

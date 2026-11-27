@@ -13,6 +13,8 @@ export interface IPaymentTransaction extends Document {
   tokensUnlocked: number;
   month: string;
   status: PaymentStatus;
+  quotaFulfilled: boolean;
+  quotaFulfilledAt?: Date;
   metadata?: Record<string, unknown>;
   createdAt: Date;
   updatedAt: Date;
@@ -29,6 +31,8 @@ const paymentTransactionSchema = new Schema<IPaymentTransaction>(
     tokensUnlocked: { type: Number, required: true, default: 5 },
     month: { type: String, required: true },
     status: { type: String, enum: ['PENDING', 'COMPLETED', 'FAILED'], default: 'PENDING', index: true },
+    quotaFulfilled: { type: Boolean, default: false, index: true },
+    quotaFulfilledAt: { type: Date },
     metadata: { type: Schema.Types.Mixed },
   },
   { timestamps: true }

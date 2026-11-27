@@ -16,3 +16,11 @@ export const authLimiter = rateLimit({
   legacyHeaders: false,
   message: { error: 'Too many authentication attempts. Please wait 15 minutes.', code: 'AUTH_RATE_LIMITED' },
 });
+
+export const guestTrackLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: env.NODE_ENV === 'test' ? 500 : 30,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'Too many tracking requests. Please slow down.', code: 'GUEST_RATE_LIMITED' },
+});

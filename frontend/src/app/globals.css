@@ -16,6 +16,21 @@
   box-shadow: none !important;
 }
 
+/* Accessibility Mode: High-contrast focus outlines & larger readable scale */
+.a11y-mode {
+  font-size: 18px;
+}
+.a11y-mode *:focus-visible {
+  outline: 3px solid #2563eb !important;
+  outline-offset: 2px !important;
+}
+.a11y-mode button,
+.a11y-mode a,
+.a11y-mode input,
+.a11y-mode select {
+  border-width: 2px;
+}
+
 @media print {
   .no-print {
     display: none !important;

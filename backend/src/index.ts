@@ -5,12 +5,15 @@ import { initRedis, closeRedis } from './config/redis.js';
 import { createApp } from './app.js';
 import { initSocketServer } from './services/socketService.js';
 import { startCronJobs, stopCronJobs } from './services/cronService.js';
+import { recoverQueueStateOnStartup } from './services/tokenEngine.js';
 import { seedIfEmpty } from './seed.js';
 
 async function main() {
   await connectDB();
   await initRedis();
   await seedIfEmpty();
+  const recovery = await recoverQueueStateOnStartup();
+  console.log('[Recovery] Startup queue reconciliation:', recovery);
 
   const app = createApp();
   const server = http.createServer(app);

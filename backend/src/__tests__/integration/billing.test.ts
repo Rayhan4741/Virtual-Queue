@@ -71,5 +71,36 @@ describe('Quota & Multi-Gateway Billing (Stripe / SSLCommerz / bKash)', () => {
     // 4th token now succeeds!
     const unlockedBook = await request(app).post('/api/tokens').set('Authorization', `Bearer ${custToken}`).send({ organizationId: orgId, serviceId });
     expect(unlockedBook.status).toBe(201);
+
+    // Crash recovery: COMPLETED payment with quotaFulfilled=false recovers exactly once without double-crediting
+    const { PaymentTransaction } = await import('../../models/PaymentTransaction.js');
+    const { MonthlyUsage } = await import('../../models/MonthlyUsage.js');
+    const { recoverPendingQuotaFulfillments } = await import('../../services/paymentService.js');
+    const { getCurrentMonthString } = await import('../../services/tokenEngine.js');
+
+    const month = getCurrentMonthString();
+    const beforeUsage = await MonthlyUsage.findOne({ organizationId: orgId, month }).lean();
+    const beforeQuota = beforeUsage?.paidExtraQuota ?? 0;
+
+    await PaymentTransaction.create({
+      userId: custRes.body.user.id,
+      organizationId: orgId,
+      provider: 'STRIPE',
+      providerSessionId: `cs_crash_test_${Date.now()}`,
+      amount: 2,
+      currency: 'USD',
+      tokensUnlocked: 5,
+      month,
+      status: 'COMPLETED',
+      quotaFulfilled: false,
+    });
+
+    const recoveredFirst = await recoverPendingQuotaFulfillments();
+    const recoveredSecond = await recoverPendingQuotaFulfillments();
+    expect(recoveredFirst).toBe(1);
+    expect(recoveredSecond).toBe(0);
+
+    const afterUsage = await MonthlyUsage.findOne({ organizationId: orgId, month }).lean();
+    expect(afterUsage?.paidExtraQuota).toBe(beforeQuota + 5);
   });
 });

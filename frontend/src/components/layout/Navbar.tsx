@@ -13,7 +13,7 @@ import { Button } from '@/components/ui/Button';
 export function Navbar() {
   const { user, logout } = useAuth();
   const { connected } = useSocket();
-  const { liteMode, toggleLiteMode, online } = useLiteMode();
+  const { liteMode, toggleLiteMode, a11yMode, toggleA11yMode, online } = useLiteMode();
   const router = useRouter();
   const [mobileOpen, setMobileOpen] = useState(false);
 
@@ -86,6 +86,17 @@ export function Navbar() {
           >
             <Zap className="h-3.5 w-3.5" />
             {liteMode ? 'Lite On' : 'Lite'}
+          </button>
+
+          <button
+            onClick={toggleA11yMode}
+            title="Accessibility Mode: Larger text & high-contrast focus"
+            aria-pressed={a11yMode}
+            className={`inline-flex items-center gap-1 rounded-lg border px-2.5 py-1.5 text-xs font-semibold transition-colors ${
+              a11yMode ? 'border-blue-600 bg-blue-600 text-white' : 'border-slate-200 text-slate-600 hover:bg-slate-50'
+            }`}
+          >
+            A+
           </button>
 
           {user ? (

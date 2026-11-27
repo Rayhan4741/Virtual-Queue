@@ -15,7 +15,7 @@ import { Input } from '@/components/ui/Input';
 import { Badge, tokenStatusBadge } from '@/components/ui/Badge';
 import { Modal } from '@/components/ui/Modal';
 
-type AdminTab = 'overview' | 'analytics' | 'services' | 'counters' | 'staff' | 'branches' | 'audit';
+type AdminTab = 'overview' | 'analytics' | 'services' | 'counters' | 'staff' | 'branches' | 'audit' | 'status';
 
 export default function AdminDashboard() {
   const { user, loading: authLoading } = useAuth();
@@ -86,9 +86,36 @@ export default function AdminDashboard() {
         analytics: {
           tokensPerDay: Array<{ date: string; total: number; completed: number; cancelled: number; noShow: number }>;
           peakHours: Array<{ hour: string; served: number; avgWaitMin: number }>;
+          servicePopularity?: Array<{ name: string; count: number }>;
+          counterUtilization?: Array<{ counterName: string; served: number; avgDurationMin: number }>;
         };
       }>(`/admin/analytics?organizationId=${activeOrg?._id}`),
     enabled: Boolean(activeOrg) && tab === 'analytics',
+  });
+
+  const { data: healthData, refetch: refetchHealth, isFetching: healthLoading } = useQuery({
+    queryKey: ['admin-system-status'],
+    queryFn: () =>
+      apiFetch<{
+        status: string;
+        instanceId: string;
+        uptimeSec: number;
+        database: { connected: boolean; readyState: number; activeTier?: string };
+        redis: { connected: boolean; mode: string };
+        metrics: {
+          totalRequests: number;
+          errorRatePercent: number;
+          avgResponseTimeMs: number;
+          failedTokenRequests: number;
+          paymentFailures: number;
+          cronFailures: number;
+          socketConnections: number;
+          memoryMb: { rss: number; heapUsed: number };
+        };
+        timestamp: string;
+      }>('/admin/system-status'),
+    enabled: tab === 'status',
+    refetchInterval: 10000,
   });
 
   const { data: servicesData } = useQuery({
@@ -259,7 +286,7 @@ export default function AdminDashboard() {
       </div>
 
       <div className="flex flex-wrap gap-2 border-b border-slate-200 pb-3">
-        {([['overview', 'Overview'], ['analytics', 'Analytics'], ['services', 'Services'], ['counters', 'Counters'], ['staff', 'Staff'], ['branches', 'Branches & Plan'], ['audit', 'Audit Logs']] as const).map(([key, label]) => (
+        {([['overview', 'Overview'], ['analytics', 'Analytics'], ['services', 'Services'], ['counters', 'Counters'], ['staff', 'Staff'], ['branches', 'Branches & Plan'], ['audit', 'Audit Logs'], ['status', 'System Status']] as const).map(([key, label]) => (
           <button key={key} onClick={() => setTab(key)} className={`rounded-lg px-3.5 py-2 text-xs font-semibold transition-colors ${tab === key ? 'bg-slate-900 text-white' : 'text-slate-600 hover:bg-slate-100'}`}>
             {label}
           </button>
@@ -352,6 +379,79 @@ export default function AdminDashboard() {
               </ResponsiveContainer>
             </CardBody>
           </Card>
+          <Card>
+            <CardHeader title="Service Performance (Completed Tokens)" />
+            <CardBody className="h-72">
+              <ResponsiveContainer width="100%" height="100%">
+                <BarChart data={analyticsData.analytics.servicePopularity ?? []}>
+                  <CartesianGrid strokeDasharray="3 3" /><XAxis dataKey="name" tick={{ fontSize: 11 }} /><YAxis /><Tooltip />
+                  <Bar dataKey="count" fill="#2563eb" name="Completed" />
+                </BarChart>
+              </ResponsiveContainer>
+            </CardBody>
+          </Card>
+          <Card>
+            <CardHeader title="Counter Efficiency & Avg Service Duration (min)" />
+            <CardBody className="h-72">
+              <ResponsiveContainer width="100%" height="100%">
+                <BarChart data={analyticsData.analytics.counterUtilization ?? []}>
+                  <CartesianGrid strokeDasharray="3 3" /><XAxis dataKey="counterName" tick={{ fontSize: 11 }} /><YAxis /><Tooltip />
+                  <Bar dataKey="served" fill="#10b981" name="Tokens Served" /><Bar dataKey="avgDurationMin" fill="#8b5cf6" name="Avg Duration (min)" />
+                </BarChart>
+              </ResponsiveContainer>
+            </CardBody>
+          </Card>
+        </div>
+      )}
+
+      {tab === 'status' && (
+        <div className="space-y-6">
+          <div className="flex items-center justify-between">
+            <div>
+              <h2 className="text-lg font-semibold text-slate-900 dark:text-white">System Health & Observability</h2>
+              <p className="text-xs text-slate-500">Live backend, database, Redis, and notification transport telemetry</p>
+            </div>
+            <Button size="sm" variant="outline" onClick={() => refetchHealth()} loading={healthLoading}>
+              Refresh Status
+            </Button>
+          </div>
+          {healthData ? (
+            <>
+              <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+                <Card><CardBody>
+                  <p className="text-xs text-slate-500">Backend API</p>
+                  <p className={`text-2xl font-bold ${healthData.status === 'ok' ? 'text-emerald-600' : 'text-amber-600'}`}>{healthData.status.toUpperCase()}</p>
+                  <p className="text-xs text-slate-500 mt-1">Uptime: {healthData.uptimeSec}s • {healthData.instanceId}</p>
+                </CardBody></Card>
+                <Card><CardBody>
+                  <p className="text-xs text-slate-500">MongoDB ({healthData.database.activeTier || 'primary'})</p>
+                  <p className={`text-2xl font-bold ${healthData.database.connected ? 'text-emerald-600' : 'text-red-600'}`}>{healthData.database.connected ? 'Connected' : 'Disconnected'}</p>
+                  <p className="text-xs text-slate-500 mt-1">ReadyState: {healthData.database.readyState}</p>
+                </CardBody></Card>
+                <Card><CardBody>
+                  <p className="text-xs text-slate-500">Redis ({healthData.redis.mode})</p>
+                  <p className={`text-2xl font-bold ${healthData.redis.connected ? 'text-emerald-600' : 'text-amber-600'}`}>{healthData.redis.connected ? 'Connected' : 'Fallback'}</p>
+                  <p className="text-xs text-slate-500 mt-1">Active Socket.IO: {healthData.metrics.socketConnections}</p>
+                </CardBody></Card>
+                <Card><CardBody>
+                  <p className="text-xs text-slate-500">Latency & Memory</p>
+                  <p className="text-2xl font-bold text-slate-900 dark:text-white">{healthData.metrics.avgResponseTimeMs} ms</p>
+                  <p className="text-xs text-slate-500 mt-1">RSS: {healthData.metrics.memoryMb.rss} MB • Heap: {healthData.metrics.memoryMb.heapUsed} MB</p>
+                </CardBody></Card>
+              </div>
+              <Card>
+                <CardHeader title="Runtime Error & Job Counters" />
+                <CardBody className="grid gap-4 sm:grid-cols-4 text-sm">
+                  <div><p className="text-xs text-slate-500">Total Requests</p><p className="text-lg font-bold">{healthData.metrics.totalRequests}</p></div>
+                  <div><p className="text-xs text-slate-500">Error Rate</p><p className="text-lg font-bold">{healthData.metrics.errorRatePercent}%</p></div>
+                  <div><p className="text-xs text-slate-500">Failed Token Requests</p><p className="text-lg font-bold">{healthData.metrics.failedTokenRequests}</p></div>
+                  <div><p className="text-xs text-slate-500">Cron / Payment Failures</p><p className="text-lg font-bold">{healthData.metrics.cronFailures} / {healthData.metrics.paymentFailures}</p></div>
+                </CardBody>
+              </Card>
+            </>
+          ) : (
+            <p className="text-sm text-slate-500">Loading system status...</p>
+          )}
         </div>
       )}
 

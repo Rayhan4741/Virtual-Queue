@@ -2,6 +2,7 @@ import { Router } from 'express';
 import { z } from 'zod';
 import { Token } from '../models/Token.js';
 import { validateBody } from '../middleware/validate.js';
+import { guestTrackLimiter } from '../middleware/rateLimiter.js';
 import { issueToken } from '../services/tokenEngine.js';
 import { getServiceEta } from '../services/etaService.js';
 import { emitQueueEvent } from '../services/socketService.js';
@@ -16,7 +17,7 @@ const kioskTokenSchema = z.object({
   source: z.enum(['KIOSK', 'GUEST']).optional().default('KIOSK'),
 });
 
-router.post('/tokens', validateBody(kioskTokenSchema), async (req, res, next) => {
+router.post('/tokens', guestTrackLimiter, validateBody(kioskTokenSchema), async (req, res, next) => {
   try {
     const token = await issueToken({
       organizationId: req.body.organizationId,
@@ -43,9 +44,9 @@ router.post('/tokens', validateBody(kioskTokenSchema), async (req, res, next) =>
   }
 });
 
-router.get('/track/:trackingCode', async (req, res, next) => {
+router.get('/track/:trackingCode', guestTrackLimiter, async (req, res, next) => {
   try {
-    const token = await Token.findOne({ trackingCode: req.params.trackingCode.toUpperCase() })
+    const token = await Token.findOne({ trackingCode: String(req.params.trackingCode).toUpperCase() })
       .select('tokenNumber status organizationId serviceId counterId queueOrderScore createdAt calledAt')
       .populate('organizationId', 'name location')
       .populate('serviceId', 'name codePrefix')
@@ -54,6 +55,12 @@ router.get('/track/:trackingCode', async (req, res, next) => {
 
     if (!token) {
       res.status(404).json({ error: 'Tracking code not found' });
+      return;
+    }
+
+    // Expire public guest tracking links after 24 hours
+    if (Date.now() - new Date(token.createdAt).getTime() > 24 * 60 * 60 * 1000) {
+      res.status(410).json({ error: 'This guest tracking link has expired (24h limit).', code: 'TRACKING_EXPIRED' });
       return;
     }
 

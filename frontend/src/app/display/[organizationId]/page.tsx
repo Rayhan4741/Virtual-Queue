@@ -22,8 +22,37 @@ export default function DisplayBoardPage() {
   const { socket } = useSocket();
   const queryClient = useQueryClient();
   const [muted, setMuted] = useState(false);
+  const [lang, setLang] = useState<'en' | 'bn'>('en');
   const [now, setNow] = useState(new Date());
   const announcedKeys = useRef<Set<string>>(new Set());
+
+  const t = lang === 'bn' ? {
+    subtitle: 'পাবলিক কিউ ডিসপ্লে',
+    loading: 'লোড হচ্ছে...',
+    muted: 'মিউট',
+    voiceOn: 'ভয়েস চালু',
+    waiting: 'জন অপেক্ষায়',
+    nowServing: 'এখন সার্ভ করা হচ্ছে',
+    noServing: 'এই মুহূর্তে কোনো কাউন্টার সার্ভ করছে না।',
+    counterUpper: 'কাউন্টার',
+    recentlyCalled: 'সদ্য কল করা হয়েছে',
+    waitingCall: 'পরবর্তী কলের জন্য অপেক্ষা করা হচ্ছে...',
+    proceedTo: 'যেতে হবে',
+    counterLabel: 'কাউন্টার',
+  } : {
+    subtitle: 'Public Queue Display',
+    loading: 'Loading...',
+    muted: 'Muted',
+    voiceOn: 'Voice On',
+    waiting: 'waiting in queue',
+    nowServing: 'Now Serving',
+    noServing: 'No active counters serving right now.',
+    counterUpper: 'COUNTER',
+    recentlyCalled: 'Recently Called',
+    waitingCall: 'Waiting for next call...',
+    proceedTo: 'PROCEED TO',
+    counterLabel: 'Counter',
+  };
 
   const { data } = useQuery({
     queryKey: ['display-board', organizationId],
@@ -87,37 +116,40 @@ export default function DisplayBoardPage() {
       <div className="space-y-8">
         <div className="flex flex-wrap items-center justify-between gap-4 border-b border-slate-800 pb-6">
           <div>
-            <span className="text-xs font-bold uppercase tracking-widest text-sky-400">Public Queue Display</span>
-            <h1 className="text-3xl lg:text-4xl font-extrabold mt-1">{data?.organization.name || 'Loading...'}</h1>
+            <span className="text-xs font-bold uppercase tracking-widest text-sky-400">{t.subtitle}</span>
+            <h1 className="text-3xl lg:text-4xl font-extrabold mt-1">{data?.organization.name || t.loading}</h1>
           </div>
           <div className="flex items-center gap-4">
+            <button onClick={() => setLang((prev) => (prev === 'en' ? 'bn' : 'en'))} className="rounded-xl border border-slate-700 bg-slate-900 px-3.5 py-2.5 text-sm font-bold text-sky-300 hover:bg-slate-800">
+              {lang === 'en' ? 'বাংলা' : 'EN'}
+            </button>
             <button onClick={() => setMuted(!muted)} className="flex items-center gap-2 rounded-xl border border-slate-700 bg-slate-900 px-4 py-2.5 text-sm font-semibold hover:bg-slate-800">
               {muted ? <VolumeX className="h-5 w-5 text-red-400" /> : <Volume2 className="h-5 w-5 text-emerald-400" />}
-              {muted ? 'Muted' : 'Voice On'}
+              {muted ? t.muted : t.voiceOn}
             </button>
             <div className="text-right">
               <p className="text-2xl font-mono font-bold">{now.toLocaleTimeString()}</p>
-              <p className="text-xs text-slate-400">{data?.waitingCount ?? 0} waiting in queue</p>
+              <p className="text-xs text-slate-400">{data?.waitingCount ?? 0} {t.waiting}</p>
             </div>
           </div>
         </div>
 
         <div className="grid gap-8 lg:grid-cols-2">
           <div className="rounded-3xl border border-emerald-500/30 bg-slate-900 p-6">
-            <h2 className="text-xl font-bold text-emerald-400 uppercase tracking-wider mb-4">Now Serving</h2>
+            <h2 className="text-xl font-bold text-emerald-400 uppercase tracking-wider mb-4">{t.nowServing}</h2>
             <div className="space-y-4">
               {(data?.servingTokens ?? []).length === 0 ? (
-                <p className="text-slate-500 py-8 text-center text-lg">No active counters serving right now.</p>
+                <p className="text-slate-500 py-8 text-center text-lg">{t.noServing}</p>
               ) : (
-                data!.servingTokens.map((t) => (
-                  <div key={t._id} className="flex items-center justify-between rounded-2xl bg-slate-950 border border-slate-800 px-6 py-5">
+                data!.servingTokens.map((tok) => (
+                  <div key={tok._id} className="flex items-center justify-between rounded-2xl bg-slate-950 border border-slate-800 px-6 py-5">
                     <div>
-                      <p className="text-4xl lg:text-5xl font-black text-white">{t.tokenNumber}</p>
-                      <p className="text-xs text-slate-400 mt-1">{t.serviceId?.name}</p>
+                      <p className="text-4xl lg:text-5xl font-black text-white">{tok.tokenNumber}</p>
+                      <p className="text-xs text-slate-400 mt-1">{tok.serviceId?.name}</p>
                     </div>
                     <div className="text-right">
-                      <span className="text-xs text-slate-400">COUNTER</span>
-                      <p className="text-3xl font-extrabold text-emerald-400">{t.counterId?.counterNumber ?? '—'}</p>
+                      <span className="text-xs text-slate-400">{t.counterUpper}</span>
+                      <p className="text-3xl font-extrabold text-emerald-400">{tok.counterId?.counterNumber ?? '—'}</p>
                     </div>
                   </div>
                 ))
@@ -126,20 +158,20 @@ export default function DisplayBoardPage() {
           </div>
 
           <div className="rounded-3xl border border-sky-500/30 bg-slate-900 p-6">
-            <h2 className="text-xl font-bold text-sky-400 uppercase tracking-wider mb-4">Recently Called</h2>
+            <h2 className="text-xl font-bold text-sky-400 uppercase tracking-wider mb-4">{t.recentlyCalled}</h2>
             <div className="space-y-4">
               {(data?.calledTokens ?? []).length === 0 ? (
-                <p className="text-slate-500 py-8 text-center text-lg">Waiting for next call...</p>
+                <p className="text-slate-500 py-8 text-center text-lg">{t.waitingCall}</p>
               ) : (
-                data!.calledTokens.map((t) => (
-                  <div key={t._id} className="flex items-center justify-between rounded-2xl bg-slate-950 border border-slate-800 px-6 py-5">
+                data!.calledTokens.map((tok) => (
+                  <div key={tok._id} className="flex items-center justify-between rounded-2xl bg-slate-950 border border-slate-800 px-6 py-5">
                     <div>
-                      <p className="text-4xl font-black text-sky-300">{t.tokenNumber}</p>
-                      <p className="text-xs text-slate-400 mt-1">{t.serviceId?.name}</p>
+                      <p className="text-4xl font-black text-sky-300">{tok.tokenNumber}</p>
+                      <p className="text-xs text-slate-400 mt-1">{tok.serviceId?.name}</p>
                     </div>
                     <div className="text-right">
-                      <span className="text-xs text-slate-400">PROCEED TO</span>
-                      <p className="text-2xl font-extrabold text-white">Counter {t.counterId?.counterNumber ?? '—'}</p>
+                      <span className="text-xs text-slate-400">{t.proceedTo}</span>
+                      <p className="text-2xl font-extrabold text-white">{t.counterLabel} {tok.counterId?.counterNumber ?? '—'}</p>
                     </div>
                   </div>
                 ))

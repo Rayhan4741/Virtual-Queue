@@ -15,6 +15,8 @@ const baseSchema = z.object({
   MONGODB_URI: isProd
     ? z.string().min(10, 'MONGODB_URI is required in production')
     : z.string().default('mongodb://127.0.0.1:27017/virtual_queue'),
+  MONGODB_SECONDARY_URI: z.string().optional().default(''),
+  MONGODB_SECONDARY_2_URI: z.string().optional().default(''),
   USE_IN_MEMORY_DB: z.string().default('false'),
   REDIS_URL: z.string().optional().default(''),
   JWT_ACCESS_SECRET: isProd

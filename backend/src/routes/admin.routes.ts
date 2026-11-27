@@ -3,6 +3,11 @@ import bcrypt from 'bcryptjs';
 import { z } from 'zod';
 import { Organization, type SubscriptionPlan } from '../models/Organization.js';
 import { Branch } from '../models/Branch.js';
+import { recordAuditLog } from '../services/auditService.js';
+import { getDbHealth } from '../config/db.js';
+import { isRedisAvailable } from '../config/redis.js';
+import { env } from '../config/env.js';
+import { metrics } from '../services/metricsService.js';
 import { Counter } from '../models/Counter.js';
 import { User } from '../models/User.js';
 import { AuditLog } from '../models/AuditLog.js';
@@ -129,6 +134,15 @@ router.post('/counters', validateBody(counterSchema), async (req: AuthRequest, r
       assignedServices: req.body.assignedServices,
       assignedStaff: req.body.assignedStaff || undefined,
     });
+    await recordAuditLog({
+      organizationId: orgId,
+      actorId: req.user!.userId,
+      actorRole: req.user!.role,
+      action: 'COUNTER_CREATED',
+      counterId: counter._id,
+      newState: counter.status,
+      metadata: { name: counter.name, counterNumber: counter.counterNumber },
+    });
     res.status(201).json({ counter });
   } catch (err) {
     next(err);
@@ -204,6 +218,14 @@ router.post('/staff', validateBody(createStaffSchema), async (req: AuthRequest, 
       passwordHash,
       role: 'STAFF',
       organizationId: orgId,
+    });
+    await recordAuditLog({
+      organizationId: orgId,
+      actorId: req.user!.userId,
+      actorRole: req.user!.role,
+      action: 'STAFF_CREATED',
+      newState: staff.status,
+      metadata: { staffName: staff.name, phone: staff.phone },
     });
     res.status(201).json({
       staff: { id: staff._id, name: staff.name, phone: staff.phone, email: staff.email, role: staff.role, status: staff.status },
@@ -320,10 +342,31 @@ router.post('/plan', validateBody(planSchema), async (req: AuthRequest, res, nex
       return;
     }
     const org = await Organization.findByIdAndUpdate(orgId, { $set: { plan: req.body.plan } }, { new: true });
+    await recordAuditLog({
+      organizationId: orgId,
+      actorId: req.user!.userId,
+      actorRole: req.user!.role,
+      action: 'PLAN_UPDATED',
+      newState: req.body.plan,
+    });
     res.json({ plan: org?.plan, limits: PLAN_LIMITS[req.body.plan as SubscriptionPlan] });
   } catch (err) {
     next(err);
   }
+});
+
+router.get('/system-status', async (_req: AuthRequest, res) => {
+  const db = getDbHealth();
+  const redis = isRedisAvailable();
+  res.json({
+    status: db.connected ? 'ok' : 'degraded',
+    instanceId: env.INSTANCE_ID,
+    uptimeSec: Math.round(process.uptime()),
+    database: db,
+    redis: { connected: redis, mode: redis ? 'redis' : 'mongodb-fallback' },
+    metrics: metrics.getSnapshot(),
+    timestamp: new Date().toISOString(),
+  });
 });
 
 export default router;

@@ -32,6 +32,21 @@ export function createSignedQrToken(
   return `${encoded}.${sig}`;
 }
 
+const usedNonces = new Map<string, number>();
+
+export function markQrNonceUsed(nonce: string, expUnixSec: number): boolean {
+  const nowSec = Math.floor(Date.now() / 1000);
+  // Prune expired nonces periodically
+  if (usedNonces.size > 5000) {
+    for (const [k, exp] of usedNonces.entries()) {
+      if (exp < nowSec) usedNonces.delete(k);
+    }
+  }
+  if (usedNonces.has(nonce)) return false;
+  usedNonces.set(nonce, expUnixSec);
+  return true;
+}
+
 export function verifySignedQrToken(qrToken: string): {
   valid: boolean;
   payload?: QrCheckInPayload;

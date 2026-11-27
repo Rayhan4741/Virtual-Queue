@@ -11,6 +11,7 @@ import { useToast } from '@/contexts/ToastContext';
 import { Card, CardBody, CardHeader } from '@/components/ui/Card';
 import { Button } from '@/components/ui/Button';
 import { tokenStatusBadge } from '@/components/ui/Badge';
+import { Modal } from '@/components/ui/Modal';
 import { Skeleton, EmptyState } from '@/components/ui/Skeleton';
 
 interface TokenItem {
@@ -36,6 +37,8 @@ export default function TokenHistoryPage() {
   const [filter, setFilter] = useState<string>('ALL');
   const [search, setSearch] = useState('');
   const [ratingTokenId, setRatingTokenId] = useState<string | null>(null);
+  const [selectedStars, setSelectedStars] = useState(5);
+  const [feedbackComment, setFeedbackComment] = useState('');
 
   useEffect(() => {
     if (!authLoading && !user) router.replace('/login');
@@ -48,11 +51,12 @@ export default function TokenHistoryPage() {
   });
 
   const rateMutation = useMutation({
-    mutationFn: ({ id, rating }: { id: string; rating: number }) =>
-      apiFetch(`/tokens/${id}/rate`, { method: 'POST', body: JSON.stringify({ rating }) }),
+    mutationFn: ({ id, rating, comment }: { id: string; rating: number; comment?: string }) =>
+      apiFetch(`/tokens/${id}/rate`, { method: 'POST', body: JSON.stringify({ rating, comment }) }),
     onSuccess: () => {
       toast({ type: 'success', title: 'Thank you for your feedback!' });
       setRatingTokenId(null);
+      setFeedbackComment('');
       queryClient.invalidateQueries({ queryKey: ['my-tokens'] });
     },
   });
@@ -149,15 +153,9 @@ export default function TokenHistoryPage() {
                 </div>
                 <div className="flex items-center gap-2">
                   {t.status === 'COMPLETED' && !t.rating && (
-                    ratingTokenId === t._id ? (
-                      [1, 2, 3, 4, 5].map((star) => (
-                        <button key={star} onClick={() => rateMutation.mutate({ id: t._id, rating: star })} className="p-1 text-amber-400 hover:scale-110">
-                          <Star className="h-4 w-4 fill-current" />
-                        </button>
-                      ))
-                    ) : (
-                      <Button variant="outline" size="sm" onClick={() => setRatingTokenId(t._id)}>Rate Service</Button>
-                    )
+                    <Button variant="outline" size="sm" onClick={() => { setRatingTokenId(t._id); setSelectedStars(5); }}>
+                      Rate / Feedback
+                    </Button>
                   )}
                   {t.rating && (
                     <span className="inline-flex items-center gap-1 text-xs font-medium text-amber-600">
@@ -171,6 +169,47 @@ export default function TokenHistoryPage() {
           </div>
         )}
       </Card>
+
+      <Modal open={Boolean(ratingTokenId)} onClose={() => setRatingTokenId(null)} title="Service Feedback & Complaint">
+        <form
+          onSubmit={(e) => {
+            e.preventDefault();
+            if (!ratingTokenId) return;
+            rateMutation.mutate({ id: ratingTokenId, rating: selectedStars, comment: feedbackComment.trim() || undefined });
+          }}
+          className="space-y-4"
+        >
+          <div>
+            <label className="block text-sm font-medium text-slate-700 mb-2">Rating</label>
+            <div className="flex gap-2">
+              {[1, 2, 3, 4, 5].map((star) => (
+                <button
+                  key={star}
+                  type="button"
+                  onClick={() => setSelectedStars(star)}
+                  className={`p-1.5 rounded-lg border ${selectedStars >= star ? 'text-amber-500 border-amber-300 bg-amber-50' : 'text-slate-300 border-slate-200'}`}
+                >
+                  <Star className="h-5 w-5 fill-current" />
+                </button>
+              ))}
+            </div>
+          </div>
+          <div>
+            <label className="block text-sm font-medium text-slate-700 mb-1">Comments or Complaint (Optional)</label>
+            <textarea
+              rows={3}
+              value={feedbackComment}
+              onChange={(e) => setFeedbackComment(e.target.value)}
+              placeholder="Share your experience or report any service issue..."
+              className="w-full rounded-lg border border-slate-300 p-3 text-sm focus:border-slate-900 focus:outline-none"
+            />
+          </div>
+          <div className="flex justify-end gap-2">
+            <Button type="button" variant="outline" onClick={() => setRatingTokenId(null)}>Cancel</Button>
+            <Button type="submit" loading={rateMutation.isPending}>Submit Feedback</Button>
+          </div>
+        </form>
+      </Modal>
     </div>
   );
 }

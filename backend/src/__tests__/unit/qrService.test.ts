@@ -12,7 +12,8 @@ describe('QR Verification Service', () => {
   it('rejects tampered QR payloads', () => {
     const qr = createSignedQrToken('org-123', { ttlSeconds: 600 });
     const [encoded, sig] = qr.split('.');
-    const tampered = `${encoded}.${sig.slice(0, -2)}00`;
+    const flippedLast = sig.endsWith('0') ? '1' : '0';
+    const tampered = `${encoded}.${sig.slice(0, -1)}${flippedLast}`;
     expect(verifySignedQrToken(tampered).valid).toBe(false);
   });
 

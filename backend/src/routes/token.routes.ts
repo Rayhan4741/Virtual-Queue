@@ -12,7 +12,7 @@ import {
   applyLatePass,
 } from '../services/tokenEngine.js';
 import { getServiceEta } from '../services/etaService.js';
-import { verifySignedQrToken } from '../services/qrService.js';
+import { verifySignedQrToken, markQrNonceUsed } from '../services/qrService.js';
 import { emitQueueEvent } from '../services/socketService.js';
 import { sendNotification } from '../services/notificationService.js';
 import { estimateTravelTime } from '../services/travelService.js';
@@ -123,6 +123,10 @@ router.post('/:id/check-in', authenticate, validateBody(checkInSchema), async (r
       res.status(400).json({ error: verification.reason || 'Invalid QR code', code: 'INVALID_QR' });
       return;
     }
+    if (!markQrNonceUsed(verification.payload.nonce, verification.payload.exp)) {
+      res.status(409).json({ error: 'QR code has already been used (replay blocked).', code: 'QR_REPLAY' });
+      return;
+    }
     const token = await checkInToken(String(req.params.id), verification.payload.organizationId, req.user!.userId);
     emitQueueEvent('token:updated', [`organization:${token.organizationId}`, `service:${token.serviceId}`, `user:${req.user!.userId}`], {
       tokenId: token._id,
@@ -189,8 +193,12 @@ router.post('/:id/rate', authenticate, validateBody(rateSchema), async (req: Aut
       res.status(400).json({ error: 'Only completed services can be rated.' });
       return;
     }
+    if (typeof token.rating === 'number') {
+      res.status(409).json({ error: 'Token has already been rated.' });
+      return;
+    }
     token.rating = req.body.rating;
-    token.ratingComment = req.body.comment;
+    token.ratingComment = req.body.comment ? req.body.comment.replace(/[<>]/g, '') : undefined;
     await token.save();
     res.json({ token });
   } catch (err) {

@@ -1,8 +1,88 @@
 import mongoose from 'mongoose';
 import { env } from './env.js';
+import { logger } from '../utils/logger.js';
+
+export type DbTier = 'PRIMARY' | 'SECONDARY_1' | 'SECONDARY_2' | 'IN_MEMORY' | 'DISCONNECTED';
 
 let memoryServer: { stop: () => Promise<boolean> } | null = null;
 let isConnected = false;
+let activeTier: DbTier = 'DISCONNECTED';
+let failoverInProgress = false;
+
+export interface DbTarget {
+  tier: Exclude<DbTier, 'IN_MEMORY' | 'DISCONNECTED'>;
+  uri: string;
+}
+
+export function getConfiguredDbTargets(): DbTarget[] {
+  const targets: DbTarget[] = [];
+  if (env.MONGODB_URI) targets.push({ tier: 'PRIMARY', uri: env.MONGODB_URI });
+  if (env.MONGODB_SECONDARY_URI) targets.push({ tier: 'SECONDARY_1', uri: env.MONGODB_SECONDARY_URI });
+  if (env.MONGODB_SECONDARY_2_URI) targets.push({ tier: 'SECONDARY_2', uri: env.MONGODB_SECONDARY_2_URI });
+  return targets;
+}
+
+/**
+ * Connects using PSS (Primary -> Secondary 1 -> Secondary 2) failover order.
+ */
+export async function connectWithPssFailover(
+  customTargets?: DbTarget[],
+  allowInMemoryFallback = env.NODE_ENV === 'development'
+): Promise<DbTier> {
+  const targets = customTargets ?? getConfiguredDbTargets();
+
+  for (const target of targets) {
+    try {
+      if (mongoose.connection.readyState !== 0) {
+        await mongoose.disconnect().catch(() => {});
+      }
+      await mongoose.connect(target.uri, {
+        serverSelectionTimeoutMS: 4000,
+        retryWrites: true,
+        w: 'majority',
+      });
+      isConnected = true;
+      activeTier = target.tier;
+      logger.info(`Connected to MongoDB (${target.tier})`, { tier: target.tier });
+      return target.tier;
+    } catch (err) {
+      logger.warn(`MongoDB ${target.tier} connection failed, trying next PSS node`, {
+        tier: target.tier,
+        reason: (err as Error).message,
+      });
+    }
+  }
+
+  if (allowInMemoryFallback) {
+    const { MongoMemoryServer } = await import('mongodb-memory-server');
+    const server = await MongoMemoryServer.create();
+    memoryServer = server;
+    await mongoose.connect(server.getUri());
+    isConnected = true;
+    activeTier = 'IN_MEMORY';
+    logger.warn('All configured PSS MongoDB nodes unavailable in dev; using MongoMemoryServer fallback');
+    return 'IN_MEMORY';
+  }
+
+  activeTier = 'DISCONNECTED';
+  throw new Error('All PSS MongoDB nodes (Primary, Secondary 1, Secondary 2) are unreachable.');
+}
+
+function attachFailoverListener() {
+  mongoose.connection.removeAllListeners('disconnected');
+  mongoose.connection.on('disconnected', async () => {
+    if (!isConnected || failoverInProgress || env.NODE_ENV === 'test' || activeTier === 'IN_MEMORY') return;
+    failoverInProgress = true;
+    logger.warn('MongoDB disconnected unexpectedly; initiating PSS failover...');
+    try {
+      await connectWithPssFailover();
+    } catch (err) {
+      logger.error('PSS failover failed', { reason: (err as Error).message });
+    } finally {
+      failoverInProgress = false;
+    }
+  });
+}
 
 export async function connectDB(): Promise<void> {
   if (isConnected && mongoose.connection.readyState === 1) return;
@@ -13,32 +93,19 @@ export async function connectDB(): Promise<void> {
     memoryServer = server;
     await mongoose.connect(server.getUri());
     isConnected = true;
-    console.log('[DB] Connected to MongoDB In-Memory Server');
+    activeTier = 'IN_MEMORY';
+    logger.info('Connected to MongoDB In-Memory Server');
     return;
   }
 
-  try {
-    await mongoose.connect(env.MONGODB_URI, {
-      serverSelectionTimeoutMS: 5000,
-    });
-    isConnected = true;
-    console.log(`[DB] Connected to MongoDB (${env.INSTANCE_ID})`);
-  } catch (err) {
-    if (env.NODE_ENV === 'development') {
-      console.warn('[DB] Primary MongoDB unavailable in dev, falling back to MongoMemoryServer...');
-      const { MongoMemoryServer } = await import('mongodb-memory-server');
-      const server = await MongoMemoryServer.create();
-      memoryServer = server;
-      await mongoose.connect(server.getUri());
-      isConnected = true;
-      console.log('[DB] Connected to MongoDB In-Memory Server (dev fallback)');
-    } else {
-      throw err;
-    }
-  }
+  await connectWithPssFailover();
+  attachFailoverListener();
 }
 
 export async function disconnectDB(): Promise<void> {
+  isConnected = false;
+  activeTier = 'DISCONNECTED';
+  mongoose.connection.removeAllListeners('disconnected');
   if (mongoose.connection.readyState !== 0) {
     await mongoose.disconnect();
   }
@@ -46,12 +113,12 @@ export async function disconnectDB(): Promise<void> {
     await memoryServer.stop();
     memoryServer = null;
   }
-  isConnected = false;
 }
 
-export function getDbHealth(): { connected: boolean; readyState: number } {
+export function getDbHealth(): { connected: boolean; readyState: number; activeTier: DbTier } {
   return {
     connected: mongoose.connection.readyState === 1,
     readyState: mongoose.connection.readyState,
+    activeTier,
   };
 }

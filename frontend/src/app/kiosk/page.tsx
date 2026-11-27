@@ -13,12 +13,41 @@ interface Service { _id: string; name: string; codePrefix: string; isAvailable: 
 
 export default function KioskPage() {
   const { toast } = useToast();
+  const [lang, setLang] = useState<'en' | 'bn'>('en');
   const [selectedOrg, setSelectedOrg] = useState<Org | null>(null);
   const [guestName, setGuestName] = useState('');
   const [issued, setIssued] = useState<{
     token: { tokenNumber: string; trackingCode: string; createdAt: string };
     eta: { estimatedWaitMinutes: number; peopleAhead: number };
   } | null>(null);
+
+  const t = lang === 'bn' ? {
+    badge: 'সেলফ-সার্ভিস কিয়স্ক',
+    title: 'কিউ টোকেন নিতে স্পর্শ করুন',
+    startOver: 'শুরু থেকে',
+    peopleAhead: 'সামনে আছেন',
+    approxWait: 'সম্ভাব্য অপেক্ষা',
+    min: 'মিনিট',
+    trackingCode: 'ট্র্যাকিং কোড',
+    printSlip: 'টোকেন স্লিপ প্রিন্ট করুন',
+    doneNext: 'সম্পন্ন (পরবর্তী গ্রাহক)',
+    yourName: 'আপনার নাম (ঐচ্ছিক)',
+    namePlaceholder: 'নাম লিখুন অথবা খালি রাখুন...',
+    prefix: 'প্রিফিক্স',
+  } : {
+    badge: 'Self-Service Kiosk',
+    title: 'Touch to Get a Queue Token',
+    startOver: 'Start Over',
+    peopleAhead: 'People Ahead',
+    approxWait: 'Approx. Wait',
+    min: 'min',
+    trackingCode: 'Tracking Code',
+    printSlip: 'Print Token Slip',
+    doneNext: 'Done (Next Customer)',
+    yourName: 'Your Name (Optional)',
+    namePlaceholder: 'Tap to enter name or leave blank...',
+    prefix: 'PREFIX',
+  };
 
   const { data: orgData } = useQuery({
     queryKey: ['kiosk-orgs'],
@@ -55,14 +84,23 @@ export default function KioskPage() {
       <div className="mx-auto w-full max-w-4xl space-y-8">
         <div className="flex items-center justify-between border-b border-slate-800 pb-6 no-print">
           <div>
-            <span className="text-xs font-bold uppercase tracking-widest text-sky-400">Self-Service Kiosk</span>
-            <h1 className="text-3xl font-extrabold mt-1">Touch to Get a Queue Token</h1>
+            <span className="text-xs font-bold uppercase tracking-widest text-sky-400">{t.badge}</span>
+            <h1 className="text-3xl font-extrabold mt-1">{t.title}</h1>
           </div>
-          {selectedOrg && !issued && (
-            <Button variant="outline" size="lg" onClick={reset} className="border-slate-700 bg-slate-900 text-white">
-              <ArrowLeft className="h-5 w-5" /> Start Over
-            </Button>
-          )}
+          <div className="flex items-center gap-3">
+            <button
+              type="button"
+              onClick={() => setLang((prev) => (prev === 'en' ? 'bn' : 'en'))}
+              className="rounded-xl border border-slate-700 bg-slate-900 px-4 py-2.5 text-sm font-bold text-sky-300 hover:bg-slate-800"
+            >
+              {lang === 'en' ? 'বাংলা' : 'EN'}
+            </button>
+            {selectedOrg && !issued && (
+              <Button variant="outline" size="lg" onClick={reset} className="border-slate-700 bg-slate-900 text-white">
+                <ArrowLeft className="h-5 w-5" /> {t.startOver}
+              </Button>
+            )}
+          </div>
         </div>
 
         {issued ? (
@@ -73,12 +111,12 @@ export default function KioskPage() {
               <QRCodeSVG value={`${typeof window !== 'undefined' ? window.location.origin : ''}/track/${issued.token.trackingCode}`} size={160} />
             </div>
             <p className="text-lg font-semibold">
-              People Ahead: <span className="text-blue-600">{issued.eta.peopleAhead}</span> • Approx. Wait: <span className="text-emerald-600">~{issued.eta.estimatedWaitMinutes} min</span>
+              {t.peopleAhead}: <span className="text-blue-600">{issued.eta.peopleAhead}</span> • {t.approxWait}: <span className="text-emerald-600">~{issued.eta.estimatedWaitMinutes} {t.min}</span>
             </p>
-            <p className="text-xs font-mono text-slate-500">Tracking Code: {issued.token.trackingCode}</p>
+            <p className="text-xs font-mono text-slate-500">{t.trackingCode}: {issued.token.trackingCode}</p>
             <div className="flex flex-wrap justify-center gap-4 pt-4 no-print">
-              <Button size="lg" variant="outline" onClick={() => window.print()}><Printer className="h-5 w-5" /> Print Token Slip</Button>
-              <Button size="lg" onClick={reset}><RotateCcw className="h-5 w-5" /> Done (Next Customer)</Button>
+              <Button size="lg" variant="outline" onClick={() => window.print()}><Printer className="h-5 w-5" /> {t.printSlip}</Button>
+              <Button size="lg" onClick={reset}><RotateCcw className="h-5 w-5" /> {t.doneNext}</Button>
             </div>
           </div>
         ) : !selectedOrg ? (
@@ -93,14 +131,14 @@ export default function KioskPage() {
         ) : (
           <div className="space-y-6">
             <div>
-              <label className="block text-sm font-medium text-slate-300 mb-2">Your Name (Optional)</label>
-              <input value={guestName} onChange={(e) => setGuestName(e.target.value)} placeholder="Tap to enter name or leave blank..." className="w-full rounded-xl border border-slate-700 bg-slate-900 px-5 py-4 text-lg text-white placeholder-slate-500 focus:border-sky-400 focus:outline-none" />
+              <label className="block text-sm font-medium text-slate-300 mb-2">{t.yourName}</label>
+              <input value={guestName} onChange={(e) => setGuestName(e.target.value)} placeholder={t.namePlaceholder} className="w-full rounded-xl border border-slate-700 bg-slate-900 px-5 py-4 text-lg text-white placeholder-slate-500 focus:border-sky-400 focus:outline-none" />
             </div>
             <div className="grid gap-5 sm:grid-cols-2">
               {(orgDetails?.services ?? []).filter((s) => s.isAvailable).map((svc) => (
                 <button key={svc._id} disabled={issueMutation.isPending} onClick={() => issueMutation.mutate(svc._id)} className="flex items-center justify-between rounded-2xl border-2 border-slate-700 bg-slate-900 p-8 text-left hover:border-emerald-400 hover:bg-slate-800 transition-all">
                   <div>
-                    <span className="font-mono text-sm font-bold text-emerald-400">PREFIX {svc.codePrefix}</span>
+                    <span className="font-mono text-sm font-bold text-emerald-400">{t.prefix} {svc.codePrefix}</span>
                     <h3 className="mt-1 text-2xl font-bold">{svc.name}</h3>
                   </div>
                   <Ticket className="h-8 w-8 text-sky-400 shrink-0" />

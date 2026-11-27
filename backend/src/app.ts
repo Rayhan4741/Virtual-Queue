@@ -9,6 +9,7 @@ import { env } from './config/env.js';
 import { apiLimiter } from './middleware/rateLimiter.js';
 import { errorHandler } from './middleware/errorHandler.js';
 import { swaggerSpec } from './utils/swagger.js';
+import { metrics } from './services/metricsService.js';
 
 import healthRoutes from './routes/health.routes.js';
 import authRoutes from './routes/auth.routes.js';
@@ -38,6 +39,8 @@ export function createApp() {
   app.use((req, res, next) => {
     const reqId = (req.headers['x-request-id'] as string) || crypto.randomUUID();
     res.setHeader('X-Request-Id', reqId);
+    const start = Date.now();
+    res.on('finish', () => metrics.recordRequest(Date.now() - start, res.statusCode));
     next();
   });
   // Preserve raw body for Stripe webhook signature verification before JSON parsing

@@ -1,96 +1,96 @@
-# FINAL PROJECT AUDIT REPORT — VIRTUAL QUEUE
+# FINAL PROJECT AUDIT & COMPREHENSIVE TECHNICAL REPORT — VIRTUAL QUEUE
 
-**Audit Date:** 2026-11-27  
+**Audit & Verification Date:** 2026-11-27  
 **Repository:** `https://github.com/Rayhan4741/Virtual-Queue.git`  
-**Audited Stack:** Next.js 15 (App Router, TypeScript, Tailwind CSS) • Express 5 (Node.js, TypeScript) • Socket.IO 4 • MongoDB (Mongoose 8) • Redis (`ioredis` / `@socket.io/redis-adapter`) • Nginx  
+**Stack:** Next.js 15 (App Router, TypeScript, Tailwind CSS) • Express 5 (Node.js, TypeScript) • Socket.IO 4 • MongoDB (Mongoose 8, PSS Failover) • Redis (`ioredis` / `@socket.io/redis-adapter`) • Nginx • Vitest + Supertest + MongoMemoryServer
 
 ---
 
-## A. Executive Summary
+## 1. Executive Summary
 
-- **Project Condition Before Audit:** Functional full-stack monorepo with all 5 UIs, 13 Mongoose models, Redis/MongoDB atomic token engine, Stripe/SSLCommerz/bKash billing, 3D Map, and 10 passing test suites (16 tests).
-- **Major Findings & P0/P1 Fixes Implemented During Audit:**
-  1. **[P0] Cross-Tenant Staff/Admin IDOR (`backend/src/routes/staff.routes.ts`, `organization.routes.ts`):** Staff/Admin routes previously checked only `role` without verifying organization/counter ownership. **Fixed** by adding `assertOrgAccess` and `assertCounterAccess` across all staff endpoints and `GET /api/organizations/:id/entrance-qr`.
-  2. **[P0] Payment Verification IDOR & Race Condition (`backend/src/services/paymentService.ts`, `billing.routes.ts`):** `/api/billing/verify` previously did not enforce `tx.userId === req.user.userId` and used non-atomic `tx.save()`. **Fixed** with ownership enforcement, atomic `PaymentTransaction.findOneAndUpdate({ _id, status: 'PENDING' }, { $set: { status: 'COMPLETED' } })`, Stripe amount/status checks, `POST /api/billing/webhook/stripe` (`constructEvent`), and production block on sandbox simulation.
-  3. **[P0] Redis-to-MongoDB Sequence Reconciliation (`backend/src/services/tokenEngine.ts`):** If Redis recovered with a lower key than MongoDB `TokenCounter` after an outage, `INCR` could lag behind MongoDB. **Fixed** by reconciling against `TokenCounter` on `INCR` and advancing Redis when MongoDB is ahead.
-  4. **[P1] Concurrent `callNextToken` & Multi-Instance Cron Races (`backend/src/services/tokenEngine.ts`):** Added atomic `Token.findOneAndUpdate({ _id, status: 'CHECKED_IN' }, ...)` in `callNextToken` and atomic `{ _id, status: 'CALLED' }` claiming in `processExpiredCalledTokens` to prevent duplicate calls/strikes across multiple instances.
-  5. **[P1] Meaningful ETA Unavailable States (`backend/src/services/etaService.ts`, `tokens/[id]/page.tsx`, `dashboard/page.tsx`):** Replaced `0` wait time on paused services / zero active counters with `null` + explicit `statusLabel` (`"Service paused"`, `"Counter temporarily unavailable"`).
-  6. **[P1] Socket.IO Reconnection Resync (`tokens/[id]/page.tsx`):** Added `socket.on('connect', ...)` room re-join and React Query cache invalidation to recover missed events after network drops.
-  7. **[P2] Request Correlation (`backend/src/app.ts`):** Added `X-Request-Id` header middleware.
-- **Overall Readiness Assessment:** **TESTING READY / STAGING READY** *(Not yet `PRODUCTION READY` until multi-container Docker/Nginx, `k6` load testing, MongoDB Atlas IP whitelisting, and live SSLCommerz/bKash/Stripe webhook tests are executed in a staging/cloud environment).*
+**Virtual Queue** is a full-stack, multi-tenant, horizontally scalable SaaS queue management platform supporting five dedicated interfaces (**Customer Web App**, **Self-Service Kiosk & Guest Tracker**, **Counter Staff Desk**, **Organization Admin Console**, and **Public TV Display Board**).
+
+Since the initial implementation, the platform has undergone a complete security audit, reliability & disaster-recovery hardening, **Primary-Secondary-Secondary (PSS)** database failover integration, and the addition of 6 operational/UX features (Advanced Analytics, Customer Feedback & Complaint Modal, Accessibility Mode, Admin Configuration Audit Trail, `EN | বাংলা` Multilingual Kiosk & Display Board, and Admin System Status Dashboard).
+
+- **Automated Verification:** **17/17 test files (26/26 unit & integration tests)** pass, `npm run typecheck` passes with 0 errors across both `backend` and `frontend`, and `npm run build` compiles cleanly (16/16 Next.js routes).
+- **Traceability & Design Patterns:** Full 39-requirement proposal mapping and 8 GoF design patterns mapping documented in `docs/TRACEABILITY_AND_PATTERNS.md`.
+- **Overall Readiness Assessment:** **TESTING READY / STAGING READY** *(Production deployment requires running `infra/docker-compose.yml` + `infra/k6/load-test.js` in a Docker/k6 staging environment, configuring MongoDB Atlas IP whitelisting & automated snapshots, and verifying live SSLCommerz/bKash/Stripe webhooks over public HTTPS).*
 
 ---
 
-## B. Architecture Review
+## 2. System Architecture & High Availability
 
-- **Frontend:** Next.js 15 App Router (`frontend/src/app/*`) with TanStack React Query, Socket.IO Client, MapLibre GL JS (`Map3D.tsx`), Recharts, and `next.config.ts` `/api/:path*` rewrite proxy.
-- **Backend:** Express 5 (`backend/src/app.ts`, `backend/src/index.ts`) with stateless JWT auth, Socket.IO + `@socket.io/redis-adapter`, and graceful `SIGTERM`/`SIGINT` connection draining.
-- **Database & Cache:** MongoDB (13 Mongoose schemas) + Upstash Redis (`rediss://`) with automatic MongoDB `TokenCounter` fallback.
-
----
-
-## C. Requirement Matrix
-
-| Requirement | Status | Evidence / File Paths |
-|---|---|---|
-| Customer Web App (`/`, `/organizations`, `/dashboard`, `/history`, `/tokens/[id]`, `/billing`) | **VERIFIED** | `frontend/src/app/*`, `npm run build` |
-| Kiosk & Guest Tracker (`/kiosk`, `/track/[trackingCode]`) | **VERIFIED** | `frontend/src/app/kiosk/page.tsx`, `backend/src/routes/kiosk.routes.ts` |
-| Staff Desk (`/staff`) | **VERIFIED** | `frontend/src/app/staff/page.tsx`, `backend/src/routes/staff.routes.ts` |
-| Admin Console (`/admin`) | **VERIFIED** | `frontend/src/app/admin/page.tsx`, `backend/src/routes/admin.routes.ts` |
-| Public Display Board (`/display/[organizationId]`) | **VERIFIED** | `frontend/src/app/display/[organizationId]/page.tsx`, `display.routes.ts` |
-| Atomic Token Engine & State Machine | **VERIFIED** | `tokenEngine.ts`, `concurrency.test.ts` (100 concurrent tokens, 0 duplicates) |
-| Redis Fallback & Multi-Instance Statelessness | **VERIFIED** | `faultTolerance.test.ts` (40 concurrent tokens across 2 instances, 0 duplicates) |
-| Auth, RBAC, Tenant Isolation & Audit Logs | **VERIFIED** | `authAndSecurity.test.ts`, `securityAudit.test.ts` |
-| Payment Quota Unlock (Stripe / SSLCommerz / bKash) | **PARTIALLY VERIFIED** | Verified locally via `billing.test.ts` & `securityAudit.test.ts` (sandbox); live merchant webhooks require public HTTPS endpoint & live credentials (`BLOCKED` on live bKash/SSLCommerz merchant accounts) |
-| Nginx LB + Docker Compose + k6 500-VU Load Test | **BLOCKED** | Configs present (`infra/nginx/nginx.conf`, `infra/docker-compose.yml`, `infra/k6/load-test.js`); `k6` and Docker daemon unavailable in this local Windows environment |
-| Multi-Branch Hierarchy (`Organization -> Branch`) | **OPTIONAL ENHANCEMENT** | Not in current schema; current model uses `Organization -> Service -> Counter` |
+- **Frontend (`frontend/`):** Next.js 15 App Router with TanStack React Query, Socket.IO Client, MapLibre GL JS (`Map3D.tsx`), Recharts, Tailwind CSS, PWA manifest, Lite Mode, and Accessibility Mode (`A+`). `/api/:path*` is proxied cleanly via `next.config.ts`.
+- **Backend (`backend/`):** Express 5 stateless API instances with JWT access tokens (15m) + rotating `HttpOnly` refresh cookies (7d), Socket.IO + `@socket.io/redis-adapter` for cross-instance real-time pub/sub, and graceful `SIGTERM`/`SIGINT` connection draining.
+- **PSS Database Failover (`backend/src/config/db.ts`):**
+  - Connects with `retryWrites: true` and `w: 'majority'` write concern, supporting ordered failover across `MONGODB_URI` (Primary) → `MONGODB_SECONDARY_URI` (Secondary 1) → `MONGODB_SECONDARY_2_URI` (Secondary 2).
+  - **Architectural Caveat (Important for Production):** Application-level URI switching does *not* replicate data between independent standalone databases (which would risk split-brain if a Primary recovers after writes went to a separate cluster). In production, `MONGODB_URI` should point to a **MongoDB Replica Set** (`mongodb+srv://...` or replica-set seed list) where MongoDB's Raft-like election handles replication and automatic primary election, while Secondary/Tertiary URIs serve as disaster-recovery / read-replica fallback targets.
+  - Exposes the active tier (`PRIMARY`, `SECONDARY_1`, `SECONDARY_2`) on the authenticated `/api/admin/system-status` endpoint.
+  - Verified at the connection-failover layer via `pssFailover.test.ts` (note: tested against `MongoMemoryServer`, not a live multi-node MongoDB Atlas replica set).
+- **Atomic Token Engine (`backend/src/services/tokenEngine.ts`):**
+  - Uses Redis `INCR` reconciled against MongoDB `TokenCounter` so recovered Redis nodes never lag behind MongoDB sequence numbers, with automatic fallback to atomic MongoDB `findOneAndUpdate` when Redis is unavailable.
+  - Database-level uniqueness enforced via compound unique index `{ serviceId, queueDate, sequenceNumber }`.
 
 ---
 
-## D. Security Report
+## 3. Security Audit & Fixes Implemented
 
-- **Fixed P0 Vulnerabilities:** Cross-tenant staff/counter IDOR (`staff.routes.ts`), cross-tenant entrance QR access (`organization.routes.ts`), and payment session verification IDOR + race-condition double-crediting (`billing.routes.ts`, `paymentService.ts`).
-- **Verified Controls:** 15m JWT access tokens, 7d rotating `HttpOnly` refresh cookies (`tokenVersion`), `bcryptjs`, `helmet`, `express-rate-limit`, Zod request & fail-fast env validation (`env.ts`), HMAC-SHA256 QR verification (`qrService.ts`), and Mongoose append-only `AuditLog` hooks.
-- **Remaining Risks:** Mongoose hooks do not prevent direct DB-level modification by a compromised DB admin user (mitigated in production by granting `insert`/`find`-only MongoDB RBAC permissions on `auditlogs`); `OWASP ZAP` DAST scan was not executed locally.
-
----
-
-## E. Token & Queue Report
-
-- **Uniqueness:** Enforced at both application layer (Redis `INCR` + MongoDB `TokenCounter` reconciliation) and database layer (`Token` unique compound index `{ serviceId, queueDate, sequenceNumber }`).
-- **State Machine:** Centralized `ALLOWED_TRANSITIONS` matrix in `tokenEngine.ts`; atomic claiming in `callNextToken` and `processExpiredCalledTokens`.
-- **Fairness:** Effective priority aging (`min(maxPriorityLevel, basePriority + floor(waitedMinutes / agingMinutes))`), deterministic ordering (`effectivePriority DESC`, `queueOrderScore ASC`, `sequenceNumber ASC`), one-time Late Pass (5 places back), max 2 recalls, 3-minute no-show cron, and 3-token free monthly remote quota.
-
----
-
-## F. Payment Report
-
-- **Stripe:** Live Test Mode `sk_test_...` verified for Checkout creation; server-side `sessions.retrieve` checks `payment_status === 'paid'` and `amount_total >= 200`; `POST /api/billing/webhook/stripe` verifies `stripe-signature`.
-- **SSLCommerz & bKash:** Session creation + sandbox simulation implemented; production live verification requires public callback URLs and live merchant credentials.
-- **Idempotency:** Atomic `PaymentTransaction.findOneAndUpdate({ _id, status: 'PENDING' }, { $set: { status: 'COMPLETED' } })` tested under parallel `Promise.all` requests in `securityAudit.test.ts`.
+1. **[P0 Fixed] Cross-Tenant Staff/Admin IDOR:** Added `assertOrgAccess` and `assertCounterAccess` across all staff endpoints (`staff.routes.ts`) and `GET /api/organizations/:id/entrance-qr` (`organization.routes.ts`).
+2. **[P0 Fixed] Payment Verification IDOR & Race Condition:** Enforced `tx.userId === req.user.userId`, atomic `PaymentTransaction.findOneAndUpdate({ _id, status: 'PENDING' }, { $set: { status: 'COMPLETED' } })`, Stripe `sessions.retrieve` amount/status validation, `POST /api/billing/webhook/stripe` signature verification, and production blocks on sandbox simulation.
+3. **[P0 Fixed] Redis-to-MongoDB Sequence Reconciliation:** Reconciles Redis counter keys against `TokenCounter` on `INCR` to prevent duplicate tokens after Redis outage/restart.
+4. **[P1 Fixed] Payment Crash Recovery & Quota Fulfillment Tracking (`PaymentTransaction.ts`, `paymentService.ts`):** Separated `status: 'COMPLETED'` from `quotaFulfilled: boolean` + `quotaFulfilledAt`. `fulfillQuotaForTransaction()` atomically claims `{ status: 'COMPLETED', quotaFulfilled: false }`, increments `MonthlyUsage`, and rolls back `quotaFulfilled: false` if `MonthlyUsage` fails so `recoverPendingQuotaFulfillments()` can safely retry without double-crediting (`billing.test.ts`).
+5. **[P1 Fixed] Public `/api/health` vs Authenticated `/api/admin/system-status`:** Public `GET /api/health` now exposes only minimal availability (`status`, `database.connected`, `redis.connected`, `timestamp`). Detailed operational telemetry (`instanceId`, `activeTier`, `memoryMb`, `socketConnections`, `errorRatePercent`, `failedTokenRequests`) is restricted to `GET /api/admin/system-status` (`ADMIN`/`SUPER_ADMIN` only, verified in `resilienceAndPrivacy.test.ts`).
+6. **[P1 Fixed] Concurrent `callNextToken` & Cron Races:** Atomic status-guarded `Token.findOneAndUpdate` prevents double-calling or double-strikes across horizontally scaled backend instances.
+7. **Customer Feedback Security (`POST /api/tokens/:id/rate`):** Enforces token ownership (`token.userId === req.user.userId`), `COMPLETED`-only status check, single-rating lock (`409 Conflict` if already rated), and HTML bracket stripping on comments.
+8. **Customer Privacy & Guest Tracking:**
+   - Unpredictable random tracking codes (`crypto.randomBytes`), per-route rate limiting, masked guest PII on public endpoints, QR replay prevention, and guest token expiration.
+9. **Immutability & Validation:** Append-only `AuditLog` Mongoose hooks (complemented in production by `insert`/`find`-only MongoDB RBAC permissions), Zod request & fail-fast environment validation (`env.ts`), `helmet`, `bcryptjs`, and `X-Request-Id` correlation middleware.
 
 ---
 
-## G. Database, Real-Time & UI/UX Summary
+## 4. Reliability, Operations & Domain Hardening
 
-- **Database:** 13 Mongoose schemas with compound unique indexes and TTL indexes (`Notification` 30d, `Announcement` 24h).
-- **Real-Time:** Socket.IO with `@socket.io/redis-adapter`, authenticated `counter:` room checks, and automatic reconnect resynchronization.
-- **UI/UX:** Responsive Tailwind CSS across all 5 interfaces, dedicated `/history` page, 3D Map (`Map3D.tsx`), Lite Mode, and PWA manifest.
+1. **Queue Recovery & Disaster Handling:**
+   - All active queue state, token positions, and counter assignments persist in MongoDB and survive server/Redis crashes.
+   - Startup reconciliation heals orphaned counter states (`disasterRecovery.test.ts`).
+2. **Counter Assignment & Workload Distribution:**
+   - Supports counter-to-service mapping, staff-to-counter assignment, availability toggles, and automatic release of stranded tokens when a counter is paused or fails (`resilienceAndPrivacy.test.ts`).
+3. **Working Hours, Holidays & Timezone (`Asia/Dhaka`):**
+   - `scheduleService.ts` and `timezone.ts` enforce organization opening/closing hours, holiday closures, daily queue date rollovers, and `Asia/Dhaka` timezone handling.
+4. **Real-Time Notification Reliability:**
+   - Socket.IO reconnect handlers re-join rooms and invalidate React Query caches to fetch latest queue state; deduplication and graceful fallback/retry handling for Web Push and Email SMTP.
+5. **Monitoring & Observability (`GET /api/health` & `GET /api/admin/system-status`):**
+   - Public `/api/health` provides minimal liveness/readiness for load balancers (`status`, `database.connected`, `redis.connected`).
+   - Authenticated Admin `/api/admin/system-status` reports backend instance ID, uptime, MongoDB connection & active PSS tier, Redis mode & connection, active Socket.IO connections, average response latency, error rate, failed token requests, cron/payment failure counters, and RSS/Heap memory usage.
+6. **Database Backup & Recovery Policy:**
+   - Documented in `docs/BACKUP_AND_RECOVERY.md` covering snapshot policy, restore procedure, data & audit log retention, accidental deletion recovery, and restore verification checklist *(Note: live Atlas production snapshot restore test must be executed once deployed to Atlas).*
 
 ---
 
-## H. Testing Report (Observed Output)
+## 5. Newly Added Platform Features
 
-- **Command:** `npm test` (Vitest v2.1.9 + Supertest + `MongoMemoryServer`)
-- **Result:** **11 test files passed, 17 tests passed, 0 failed** (Duration: `5.19s`):
-  - Unit: `envValidation.test.ts` (2), `qrService.test.ts` (3), `etaService.test.ts` (2), `stateMachine.test.ts` (2), `queueOrdering.test.ts` (2).
-  - Integration: `concurrency.test.ts` (1), `authAndSecurity.test.ts` (1), `faultTolerance.test.ts` (1), `tokenLifecycle.test.ts` (1), `securityAudit.test.ts` (1), `billing.test.ts` (1).
-- **Typecheck:** `npm run typecheck` (`backend` + `frontend` `tsc --noEmit`) — **Passed (0 errors)**.
-- **Not Executed:** `k6` 500-VU load test, Docker Compose multi-container run, Playwright E2E, and OWASP ZAP (due to missing external tools/daemon in local environment).
+1. **Advanced Analytics (`frontend/src/app/admin/page.tsx`, `backend/src/services/analyticsService.ts`):**
+   - Computed 100% from real MongoDB `Token` and `ServiceLog` aggregations (zero hardcoded/mocked data): daily token volume (`tokensPerDay`), peak hours & average wait time (`peakHours`), **Service Performance (`servicePopularity`)**, and **Counter Efficiency (`counterUtilization`)** based on actual `ServiceLog` `served` counts and `durationSec` (`avgDurationMin`).
+2. **Customer Feedback System (`frontend/src/app/history/page.tsx`):**
+   - Dedicated **Service Feedback & Complaint** modal with 1–5 star rating and written feedback/complaint submission (`POST /api/tokens/:id/rate`).
+3. **Accessibility Mode (`A+`) (`globals.css`, `LiteModeContext.tsx`, `Navbar.tsx`):**
+   - Persistent `A+` toggle (`vq_a11y_mode`) enabling larger base typography (`18px`), high-contrast `3px` `:focus-visible` outlines, and thicker control borders for elderly, low-vision, and keyboard-only users.
+4. **Advanced Audit Trail (`backend/src/routes/admin.routes.ts`):**
+   - Records `COUNTER_CREATED`, `STAFF_CREATED`, `PLAN_UPDATED`, and operational actions in the append-only `AuditLog`.
+5. **Multilingual Support (`EN | বাংলা`) (`kiosk/page.tsx`, `display/[organizationId]/page.tsx`):**
+   - Live English / Bengali (`বাংলা`) interface toggle on both the Self-Service Kiosk and Public Queue Display Board.
+6. **Admin System Status Dashboard (`frontend/src/app/admin/page.tsx`):**
+   - Live **System Status** tab polling authenticated `/api/admin/system-status` every 10 seconds to display Backend, MongoDB PSS tier, Redis, Socket.IO, latency, memory, and error counters.
 
 ---
 
-## I. Final Readiness Assessment
+## 6. Verification Results (Observed Output)
 
-**Verdict: TESTING READY / STAGING READY**  
-All core business logic, security/IDOR protections, concurrency guarantees, payment idempotency, TypeScript checks, and 17 automated unit/integration tests pass locally. Before declaring `PRODUCTION READY`, execute `infra/docker-compose.yml` + `infra/k6/load-test.js` in a Docker/k6 staging environment, configure MongoDB Atlas IP access & automated backups, and verify live payment webhooks over HTTPS.
+- **Test Suite (`npm run test:coverage --workspace=backend` — Vitest v2.1.9 + Supertest + `MongoMemoryServer`):**
+  - **17 test files passed (17), 26 tests passed (26), 0 failed** (Duration: `15.80s`):
+    - **Unit (7 files, 15 tests):** `envValidation.test.ts` (2), `qrService.test.ts` (3), `etaService.test.ts` (2), `stateMachine.test.ts` (2), `queueOrdering.test.ts` (2), `scheduleService.test.ts` (2), `timezone.test.ts` (2).
+    - **Integration (10 files, 11 tests):** `concurrency.test.ts` (1 — 100 concurrent tokens, 0 duplicates), `authAndSecurity.test.ts` (1), `disasterRecovery.test.ts` (1), `faultTolerance.test.ts` (1 — 2 backend instances without Redis), `resilienceAndPrivacy.test.ts` (1 — counter pause release, QR replay, guest PII mask, `/api/health` vs `/api/admin/system-status`), `edgeCasesAndSocket.test.ts` (1 — token transfer, simultaneous `call-next`, multi-instance no-show cron race, duplicate rating `409` & XSS stripping), `tokenLifecycle.test.ts` (1), `securityAudit.test.ts` (1), `billing.test.ts` (1 — quota + crash recovery), `pssFailover.test.ts` (2 — Primary → Secondary 1 → Secondary 2 failover).
+  - **Code Coverage (`v8`):** Overall `53.3%` statements / `73.33%` functions (`tokenEngine.ts` `74.72%`, `etaService.ts` `89.32%`, `scheduleService.ts` `89.83%`, `qrService.ts` `81.25%`, `auditService.ts` `100%`, `metricsService.ts` `86.95%`).
+- **TypeScript Typecheck (`npm run typecheck`):** Passed with **0 errors** across `backend` and `frontend`.
+- **Production Build (`npm run build`):** Passed cleanly — `backend` (`tsc -p tsconfig.json`) and `frontend` (`next build`, 16/16 routes generated).
+- **Not Executed Locally (Staging Required):** `k6` 500-VU load test (`infra/k6/load-test.js`), multi-container Docker/Nginx run (`infra/docker-compose.yml`), live MongoDB Atlas production restore drill, live SSLCommerz/bKash merchant webhooks, and OWASP ZAP DAST scan.

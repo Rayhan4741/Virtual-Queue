@@ -265,94 +265,132 @@ export async function completePaymentAndUnlockQuota(
   if (requestingUserId && tx.userId.toString() !== requestingUserId) {
     throw new Error('Forbidden: payment session belongs to another user.');
   }
-  if (tx.status === 'COMPLETED') {
+  if (tx.status === 'COMPLETED' && tx.quotaFulfilled) {
     return { unlocked: 0, alreadyCompleted: true };
   }
   if (env.NODE_ENV === 'production' && tx.metadata?.mode === 'sandbox_simulation') {
     throw new Error('Sandbox simulation payments cannot be verified in production.');
   }
 
-  // Verify live Stripe session if configured
-  if (tx.provider === 'STRIPE' && stripeClient && !tx.metadata?.mode) {
-    const session = await stripeClient.checkout.sessions.retrieve(sessionId);
-    if (session.payment_status !== 'paid' || (session.amount_total && session.amount_total < 200)) {
-      throw new Error('Stripe payment has not been completed or amount mismatch.');
+  // If payment was not yet marked COMPLETED, verify with provider and transition PENDING -> COMPLETED
+  if (tx.status === 'PENDING') {
+    // Verify live Stripe session if configured
+    if (tx.provider === 'STRIPE' && stripeClient && !tx.metadata?.mode) {
+      const session = await stripeClient.checkout.sessions.retrieve(sessionId);
+      if (session.payment_status !== 'paid' || (session.amount_total && session.amount_total < 200)) {
+        throw new Error('Stripe payment has not been completed or amount mismatch.');
+      }
     }
+
+    // Verify SSLCommerz transaction via Validation API when live/sandbox store credentials are active
+    if (
+      tx.provider === 'SSLCOMMERZ' &&
+      env.SSLCOMMERZ_STORE_ID &&
+      env.SSLCOMMERZ_STORE_PASSWORD &&
+      tx.metadata?.mode !== 'sandbox_simulation'
+    ) {
+      const valBase =
+        env.SSLCOMMERZ_IS_SANDBOX === 'true'
+          ? 'https://sandbox.sslcommerz.com/validator/api/validationserverAPI.php'
+          : 'https://securepay.sslcommerz.com/validator/api/validationserverAPI.php';
+      const valUrl = `${valBase}?tran_id=${encodeURIComponent(sessionId)}&store_id=${encodeURIComponent(
+        env.SSLCOMMERZ_STORE_ID
+      )}&store_passwd=${encodeURIComponent(env.SSLCOMMERZ_STORE_PASSWORD)}&format=json`;
+      const valRes = await fetch(valUrl, { signal: AbortSignal.timeout(8000) });
+      const valJson = (await valRes.json()) as { status?: string; amount?: string };
+      const statusOk = valJson.status === 'VALID' || valJson.status === 'VALIDATED';
+      if (!statusOk || Number(valJson.amount || 0) < tx.amount) {
+        throw new Error('SSLCommerz server-side validation failed.');
+      }
+    }
+
+    // Execute & verify bKash payment when live/sandbox merchant credentials are active
+    if (
+      tx.provider === 'BKASH' &&
+      env.BKASH_APP_KEY &&
+      env.BKASH_APP_SECRET &&
+      tx.metadata?.mode !== 'sandbox_simulation'
+    ) {
+      const base =
+        env.BKASH_IS_SANDBOX === 'true'
+          ? 'https://tokenized.sandbox.bka.sh/v1.2.0-beta'
+          : 'https://tokenized.pay.bka.sh/v1.2.0-beta';
+      const tokenRes = await fetch(`${base}/tokenized/checkout/token/grant`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', username: env.BKASH_USERNAME, password: env.BKASH_PASSWORD },
+        body: JSON.stringify({ app_key: env.BKASH_APP_KEY, app_secret: env.BKASH_APP_SECRET }),
+      });
+      const tokenJson = (await tokenRes.json()) as { id_token?: string };
+      if (!tokenJson.id_token) throw new Error('bKash token grant failed during verification.');
+
+      const execRes = await fetch(`${base}/tokenized/checkout/execute`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          authorization: tokenJson.id_token,
+          'x-app-key': env.BKASH_APP_KEY,
+        },
+        body: JSON.stringify({ paymentID: sessionId }),
+      });
+      const execJson = (await execRes.json()) as { transactionStatus?: string; amount?: string };
+      if (execJson.transactionStatus !== 'Completed' || Number(execJson.amount || 0) < tx.amount) {
+        throw new Error('bKash payment execution/verification failed.');
+      }
+    }
+
+    // Atomic transition PENDING -> COMPLETED prevents race-condition double completion
+    await PaymentTransaction.findOneAndUpdate(
+      { _id: tx._id, status: 'PENDING' },
+      { $set: { status: 'COMPLETED' } },
+      { new: true }
+    );
   }
 
-  // Verify SSLCommerz transaction via Validation API when live/sandbox store credentials are active
-  if (
-    tx.provider === 'SSLCOMMERZ' &&
-    env.SSLCOMMERZ_STORE_ID &&
-    env.SSLCOMMERZ_STORE_PASSWORD &&
-    tx.metadata?.mode !== 'sandbox_simulation'
-  ) {
-    const valBase =
-      env.SSLCOMMERZ_IS_SANDBOX === 'true'
-        ? 'https://sandbox.sslcommerz.com/validator/api/validationserverAPI.php'
-        : 'https://securepay.sslcommerz.com/validator/api/validationserverAPI.php';
-    const valUrl = `${valBase}?tran_id=${encodeURIComponent(sessionId)}&store_id=${encodeURIComponent(
-      env.SSLCOMMERZ_STORE_ID
-    )}&store_passwd=${encodeURIComponent(env.SSLCOMMERZ_STORE_PASSWORD)}&format=json`;
-    const valRes = await fetch(valUrl, { signal: AbortSignal.timeout(8000) });
-    const valJson = (await valRes.json()) as { status?: string; amount?: string };
-    const statusOk = valJson.status === 'VALID' || valJson.status === 'VALIDATED';
-    if (!statusOk || Number(valJson.amount || 0) < tx.amount) {
-      throw new Error('SSLCommerz server-side validation failed.');
-    }
-  }
-
-  // Execute & verify bKash payment when live/sandbox merchant credentials are active
-  if (
-    tx.provider === 'BKASH' &&
-    env.BKASH_APP_KEY &&
-    env.BKASH_APP_SECRET &&
-    tx.metadata?.mode !== 'sandbox_simulation'
-  ) {
-    const base =
-      env.BKASH_IS_SANDBOX === 'true'
-        ? 'https://tokenized.sandbox.bka.sh/v1.2.0-beta'
-        : 'https://tokenized.pay.bka.sh/v1.2.0-beta';
-    const tokenRes = await fetch(`${base}/tokenized/checkout/token/grant`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', username: env.BKASH_USERNAME, password: env.BKASH_PASSWORD },
-      body: JSON.stringify({ app_key: env.BKASH_APP_KEY, app_secret: env.BKASH_APP_SECRET }),
-    });
-    const tokenJson = (await tokenRes.json()) as { id_token?: string };
-    if (!tokenJson.id_token) throw new Error('bKash token grant failed during verification.');
-
-    const execRes = await fetch(`${base}/tokenized/checkout/execute`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        authorization: tokenJson.id_token,
-        'x-app-key': env.BKASH_APP_KEY,
-      },
-      body: JSON.stringify({ paymentID: sessionId }),
-    });
-    const execJson = (await execRes.json()) as { transactionStatus?: string; amount?: string };
-    if (execJson.transactionStatus !== 'Completed' || Number(execJson.amount || 0) < tx.amount) {
-      throw new Error('bKash payment execution/verification failed.');
-    }
-  }
-
-  // Atomic transition PENDING -> COMPLETED prevents race-condition double crediting
-  const claimed = await PaymentTransaction.findOneAndUpdate(
-    { _id: tx._id, status: 'PENDING' },
-    { $set: { status: 'COMPLETED' } },
-    { new: true }
-  );
-  if (!claimed) {
+  // Separate atomic fulfillment claim: handles both normal flow and crash recovery (COMPLETED + quotaFulfilled=false)
+  const fulfilled = await fulfillQuotaForTransaction(tx._id);
+  if (!fulfilled) {
     return { unlocked: 0, alreadyCompleted: true };
   }
 
-  await MonthlyUsage.updateOne(
-    { userId: tx.userId, organizationId: tx.organizationId, month: tx.month },
-    { $inc: { paidExtraQuota: tx.tokensUnlocked } },
-    { upsert: true }
-  );
-
   return { unlocked: tx.tokensUnlocked, alreadyCompleted: false };
+}
+
+/**
+ * Atomically fulfills monthly quota for a COMPLETED transaction.
+ * Rolls back quotaFulfilled=false if MonthlyUsage update fails so recovery can safely retry.
+ */
+export async function fulfillQuotaForTransaction(txId: unknown): Promise<boolean> {
+  const claimed = await PaymentTransaction.findOneAndUpdate(
+    { _id: txId, status: 'COMPLETED', quotaFulfilled: false },
+    { $set: { quotaFulfilled: true, quotaFulfilledAt: new Date() } },
+    { new: true }
+  );
+  if (!claimed) return false;
+
+  try {
+    await MonthlyUsage.updateOne(
+      { userId: claimed.userId, organizationId: claimed.organizationId, month: claimed.month },
+      { $inc: { paidExtraQuota: claimed.tokensUnlocked } },
+      { upsert: true }
+    );
+    return true;
+  } catch (err) {
+    await PaymentTransaction.updateOne({ _id: claimed._id }, { $set: { quotaFulfilled: false }, $unset: { quotaFulfilledAt: 1 } });
+    throw err;
+  }
+}
+
+/**
+ * Recovers any COMPLETED transactions whose quota fulfillment failed or crashed mid-flight.
+ */
+export async function recoverPendingQuotaFulfillments(): Promise<number> {
+  const pending = await PaymentTransaction.find({ status: 'COMPLETED', quotaFulfilled: false }).select('_id').lean();
+  let recovered = 0;
+  for (const tx of pending) {
+    const ok = await fulfillQuotaForTransaction(tx._id);
+    if (ok) recovered++;
+  }
+  return recovered;
 }
 
 export function constructStripeWebhookEvent(rawBody: Buffer, signature: string) {
