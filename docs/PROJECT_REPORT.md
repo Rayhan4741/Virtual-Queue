@@ -141,7 +141,8 @@ A `node-cron` job runs every minute, identifies `CALLED` tokens with `recallCoun
 ### Security Controls
 - **Passwords & Tokens:** `bcryptjs` hashing; 15-minute JWT access tokens; 7-day rotating `HttpOnly` refresh cookies validated against `User.tokenVersion`.
 - **QR Anti-Spoofing:** Entrance QR codes are base64url payloads signed with HMAC-SHA256 (`QR_SIGNING_SECRET`) and expiration timestamps, verified via `crypto.timingSafeEqual`.
-- **Hardening:** `helmet`, strict `cors`, `express-rate-limit` (separate strict limiter for `/api/auth/*`), Zod input & environment validation (`env.ts` fails fast in `production` if secrets are missing or `< 32` chars).
+- **Hardening:** `helmet`, strict `cors`, `express-rate-limit` (separate strict limiter for `/api/auth/*`), Zod input & environment validation (`env.ts` fails fast in `production` if secrets are missing or `< 32` chars), cross-tenant IDOR guards (`assertOrgAccess`, `assertCounterAccess`), and authenticated `/api/admin/system-status` (keeping public `/api/health` minimal).
+- **Database High Availability & Payment Recovery:** Ordered PSS (`PRIMARY -> SECONDARY_1 -> SECONDARY_2`) failover with `retryWrites: true, w: 'majority'` (requiring a MongoDB Replica Set in production to prevent split-brain), plus crash-safe `PaymentTransaction.quotaFulfilled` recovery (`recoverPendingQuotaFulfillments()`).
 - **Zero Frontend Secret Exposure:** All private keys reside in `backend/.env`; `frontend/.env.local` contains only safe `NEXT_PUBLIC_*` keys.
 
 ---
@@ -150,34 +151,28 @@ A `node-cron` job runs every minute, identifies `CALLED` tokens with `recallCoun
 
 | Interface | Route(s) | Key Capabilities |
 |---|---|---|
-| **Customer Web App** | `/`, `/organizations`, `/dashboard`, `/history`, `/tokens/[id]`, `/billing` | Remote booking, 3D Map & route preview, live Socket.IO tracker, QR check-in, Leave Alert, Snooze, Late Pass, Rating, Stripe/SSLCommerz/bKash quota unlock, AI Assistant |
-| **Kiosk & Guest** | `/kiosk`, `/track/[trackingCode]` | Accountless touch booking into the shared queue, printable QR slip, 30s auto-reset |
+| **Customer Web App** | `/`, `/organizations`, `/dashboard`, `/history`, `/tokens/[id]`, `/billing` | Remote booking, 3D Map & route preview, live Socket.IO tracker, QR check-in, Leave Alert, Snooze, Late Pass, Rating & Feedback Modal, Accessibility Mode (`A+`), Stripe/SSLCommerz/bKash sandbox quota unlock, AI Assistant |
+| **Kiosk & Guest** | `/kiosk`, `/track/[trackingCode]` | Accountless touch booking into the shared queue, `EN \| বাংলা` bilingual UI, printable QR slip, 30s auto-reset |
 | **Staff Desk** | `/staff` | Call Next, Recall (max 2), Start, Complete, Skip/No-Show, Transfer, Pause/Resume Counter, Walk-in & Manual Fallback tokens, Announcements |
-| **Admin Console** | `/admin` | Live Active Queue + `Done (Complete)`, KPI overview, Recharts daily/peak-hour analytics, Org/Service/Counter/Staff CRUD, Entrance QR generator, Immutable Audit Logs |
-| **Display Board** | `/display/[organizationId]` | Real-time Now Serving & Recently Called, announcements ticker, Web Speech API voice announcements with deduplication & mute control |
+| **Admin Console** | `/admin` | Live Active Queue + `Done (Complete)`, KPI overview, Recharts daily/peak-hour/service-popularity/counter-utilization analytics, **System Status** dashboard (`/api/admin/system-status`), Org/Service/Counter/Staff CRUD, Entrance QR generator, Audit Logs |
+| **Display Board** | `/display/[organizationId]` | Real-time Now Serving & Recently Called, `EN \| বাংলা` bilingual UI, announcements ticker, Web Speech API voice announcements with deduplication & mute control |
 
 ---
 
 ## 9. Verification & Test Evidence
 
-### Automated Test Suite (`npm test` — Vitest + Supertest + MongoMemoryServer)
-**Result: 10 Test Files Passed, 16 Tests Passed (0 Failed)**
-- **Unit Tests:**
-  - `stateMachine.test.ts` (2 tests): Valid transitions & terminal/invalid transition rejection.
-  - `queueOrdering.test.ts` (2 tests): Anti-starvation priority aging & cap enforcement.
-  - `etaService.test.ts` (2 tests): Edge-case guards & MAPE ≤ 25% on simulated dataset.
-  - `qrService.test.ts` (3 tests): HMAC signing, tamper rejection, expiry rejection.
-  - `envValidation.test.ts` (2 tests): Production fail-fast validation on missing secrets.
-- **Integration, Concurrency & Security Tests:**
-  - `authAndSecurity.test.ts` (1 test): Registration, RBAC `403` enforcement, and `AuditLog` immutability.
-  - `tokenLifecycle.test.ts` (1 test): Full flow — Org/Service/Counter setup → remote booking → duplicate block → QR check-in → Call → No-Show → Late Pass → Start → Complete.
-  - `concurrency.test.ts` (1 test): **100 simultaneous token requests** yielding **100 unique token numbers** (0 duplicates).
-  - `faultTolerance.test.ts` (1 test): **40 concurrent requests across 2 stateless backend instances** sharing MongoDB with Redis disabled (0 duplicates).
-  - `billing.test.ts` (1 test): 3-token free quota limit (`429 QUOTA_EXCEEDED`) → payment verification → +5 unlock → 4th booking succeeds.
+### Automated Test Suite (`npm run test:coverage --workspace=backend` — Vitest + Supertest + MongoMemoryServer)
+**Result: 17 Test Files Passed, 26 Tests Passed (0 Failed)**  
+**v8 Code Coverage:** Overall `53.3%` statements / `73.33%` functions (`tokenEngine.ts` `74.72%`, `etaService.ts` `89.32%`, `scheduleService.ts` `89.83%`, `qrService.ts` `81.25%`, `auditService.ts` `100%`, `metricsService.ts` `86.95%`).
+- **Unit Tests (7 files, 15 tests):**
+  - `stateMachine.test.ts` (2), `queueOrdering.test.ts` (2), `etaService.test.ts` (2), `qrService.test.ts` (3), `envValidation.test.ts` (2), `scheduleService.test.ts` (2), `timezone.test.ts` (2).
+- **Integration, Concurrency & Security Tests (10 files, 11 tests):**
+  - `authAndSecurity.test.ts` (1), `tokenLifecycle.test.ts` (1), `concurrency.test.ts` (1 — 100 simultaneous requests, 0 duplicates), `faultTolerance.test.ts` (1 — 2 stateless instances without Redis, 0 duplicates), `securityAudit.test.ts` (1 — cross-tenant IDOR & payment idempotency), `billing.test.ts` (1 — quota + crash recovery), `disasterRecovery.test.ts` (1), `resilienceAndPrivacy.test.ts` (1 — counter pause release, QR replay, guest PII mask, `/api/health` vs `/api/admin/system-status`), `edgeCasesAndSocket.test.ts` (1 — token transfer, simultaneous `call-next`, multi-instance no-show cron race, duplicate rating `409` & XSS stripping), `pssFailover.test.ts` (2 — Primary → Secondary 1 → Secondary 2 failover).
 
 ### Build & Typecheck Verification
-- `npm run build` (`backend` `tsc -p tsconfig.json` + `frontend` `next build` across 15 routes): **Passed (0 errors)**.
-- `npm run typecheck --workspace=frontend` (after final `Map3D.tsx` and `/history` edits): **Passed (0 errors)**.
+- `npm run build` (`backend` `tsc -p tsconfig.json` + `frontend` `next build` across 16 routes): **Passed (0 errors)**.
+- `npm run typecheck` (`backend` + `frontend` `tsc --noEmit`): **Passed (0 errors)**.
+- **Additional Documentation:** See `FINAL_PROJECT_AUDIT_REPORT.md`, `docs/BACKUP_AND_RECOVERY.md`, and `docs/TRACEABILITY_AND_PATTERNS.md`.
 
 ---
 
