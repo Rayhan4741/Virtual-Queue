@@ -13,13 +13,14 @@ router.get('/:organizationId', async (req, res, next) => {
   try {
     const { organizationId } = req.params;
     const { serviceId } = req.query;
-    const today = getTodayDateString();
 
-    const org = await Organization.findById(organizationId).select('name type location workingHours').lean();
+    const org = await Organization.findById(organizationId).select('name type location workingHours timezone').lean();
     if (!org) {
       res.status(404).json({ error: 'Organization not found' });
       return;
     }
+
+    const today = getTodayDateString(org.timezone || 'Asia/Dhaka');
 
     const tokenFilter: Record<string, unknown> = { organizationId, queueDate: today };
     if (serviceId && typeof serviceId === 'string') {

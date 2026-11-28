@@ -26,9 +26,15 @@
 6. **[P1] Feedback Validation (`backend/src/routes/token.routes.ts`):**
    - Enforces token ownership, `COMPLETED`-only status, single-rating lock (`409 Conflict`), 1–5 bounds, 500-char limit, and `<`/`>` stripping.
 
+7. **[P1] Public Display Board Organization Timezone (`backend/src/routes/display.routes.ts`):**
+   - **Defect Found:** `GET /api/display/:organizationId` previously called `getTodayDateString()` before fetching the organization, defaulting to `Asia/Dhaka` instead of `org.timezone`.
+   - **Fix:** Fetches `org` (including `timezone`) first and passes `getTodayDateString(org.timezone || 'Asia/Dhaka')` (`aiTravelAndDisplay.test.ts`).
+
 ---
 
 ## 2. Tests Added
+
+- `backend/src/__tests__/integration/aiTravelAndDisplay.test.ts`: Tests `travelService` Haversine fallback across driving/cycling/walking modes, `aiAssistantService` rule-based guardrails, and `GET /api/display/:organizationId` with non-Dhaka `America/New_York` timezone.
 
 - `backend/src/__tests__/integration/socketAndCron.test.ts`: Tests `sanitizePublicTokenPayload`, live `socket.io-client` WebSocket `join:counter` cross-tenant rejection & wire-level PII stripping, `cronService` start/stop, and `analyticsService` (`getAdminDashboardSummary`, `getAdminAnalytics`) against real `Token` (`COMPLETED`, `CANCELLED`, `NO_SHOW`) and `ServiceLog` documents.
 - `backend/src/__tests__/integration/concurrency.test.ts`: Upgraded to **1,000 simultaneous kiosk tokens** with zero duplicate token numbers.
@@ -45,15 +51,15 @@
 - **`npm run typecheck`** (`backend` + `frontend` `tsc --noEmit`): **Passed (0 errors)**.
 - **`npm run build`** (`backend` `tsc -p tsconfig.json` + `frontend` `next build`): **Passed (0 errors, 16/16 Next.js routes built)**.
 - **`npm run test:coverage --workspace=backend`** (Vitest v2.1.9 + Supertest + `MongoMemoryServer`):
-  - **Observed Result:** **19 test files passed (19), 30 tests passed (30), 0 failed** (Duration: `15.52s`).
+  - **Observed Result:** **20 test files passed (20), 32 tests passed (32), 0 failed** (Duration: `15.93s`).
 
 ---
 
 ## 4. Updated Coverage Results (Observed `v8` Output)
 
-- **Overall (`All files`):** **65.85% Stmts | 53.84% Branch | 82.25% Funcs | 65.85% Lines**
+- **Overall (`All files`):** **69.68% Stmts | 55.22% Branch | 87.09% Funcs | 69.68% Lines**
 - **Middleware:** **70.21% Stmts | 44% Branch | 80% Funcs** (`rateLimiter.ts` 100%, `auth.ts` 63.15%, `errorHandler.ts` 63.15%, `validate.ts` 53.33%)
-- **Services (`65.62%` Stmts | `54.74%` Branch | `82.45%` Funcs):**
+- **Services (`69.65%` Stmts | `56.12%` Branch | `87.71%` Funcs):**
   - `analyticsService.ts`: **100%** Stmts / **100%** Funcs
   - `auditService.ts`: **100%** Stmts / **100%** Funcs
   - `scheduleService.ts`: **89.83%** Stmts / **100%** Funcs
@@ -62,10 +68,11 @@
   - `socketService.ts`: **86.59%** Stmts / **71.87%** Branch / **100%** Funcs
   - `qrService.ts`: **81.25%** Stmts / **100%** Funcs
   - `tokenEngine.ts`: **74.72%** Stmts / **90.47%** Funcs
+  - `travelService.ts`: **55.1%** Stmts / **100%** Funcs
   - `notificationService.ts`: **50.66%** Stmts
   - `paymentService.ts`: **49.11%** Stmts / **83.33%** Funcs (live external HTTP branches not executed offline)
+  - `aiAssistantService.ts`: **41.07%** Stmts / **100%** Funcs
   - `cronService.ts`: **31.7%** Stmts / **100%** Funcs
-  - `aiAssistantService.ts` (`0.89%`), `travelService.ts` (`2.04%`)
 
 ---
 
@@ -92,4 +99,4 @@
 
 **Status: `STAGING READY`**
 
-All 19 automated test suites (30 tests), TypeScript checks, Next.js/Express builds, Socket.IO room privacy/isolation fixes, and crash-safe payment/token recovery logic pass locally. **Not `PRODUCTION READY`** until verified in a staging environment with a real MongoDB Replica Set, Docker/Nginx multi-instance run, `k6` load testing, and a live Atlas backup restore drill.
+All 20 automated test suites (32 tests), TypeScript checks, Next.js/Express builds, Socket.IO room privacy/isolation fixes, and crash-safe payment/token recovery logic pass locally. **Not `PRODUCTION READY`** until verified in a staging environment with a real MongoDB Replica Set, Docker/Nginx multi-instance run, `k6` load testing, and a live Atlas backup restore drill.
