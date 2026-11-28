@@ -14,7 +14,7 @@ afterAll(async () => {
 });
 
 describe('Concurrent Atomic Token Generation', () => {
-  it('issues 100 simultaneous kiosk tokens with zero duplicate token numbers', async () => {
+  it('issues 1,000 simultaneous kiosk tokens with zero duplicate token numbers', async () => {
     const admin = await User.create({
       name: 'Conc Admin',
       phone: '01600000001',
@@ -37,7 +37,7 @@ describe('Concurrent Atomic Token Generation', () => {
       avgServiceTimeSec: 180,
     });
 
-    const promises = Array.from({ length: 100 }, (_, i) =>
+    const promises = Array.from({ length: 1000 }, (_, i) =>
       issueToken({
         organizationId: org._id.toString(),
         serviceId: svc._id.toString(),
@@ -50,7 +50,7 @@ describe('Concurrent Atomic Token Generation', () => {
     const numbers = tokens.map((t) => t.tokenNumber);
     const unique = new Set(numbers);
 
-    expect(tokens.length).toBe(100);
-    expect(unique.size).toBe(100);
-  });
+    expect(tokens.length).toBe(1000);
+    expect(unique.size).toBe(1000);
+  }, 30000);
 });

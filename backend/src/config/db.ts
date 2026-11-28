@@ -29,6 +29,16 @@ export async function connectWithPssFailover(
   customTargets?: DbTarget[],
   allowInMemoryFallback = env.NODE_ENV === 'development'
 ): Promise<DbTier> {
+  if (
+    env.NODE_ENV === 'production' &&
+    !customTargets &&
+    (env.MONGODB_SECONDARY_URI || env.MONGODB_SECONDARY_2_URI) &&
+    env.ALLOW_URI_FALLBACK !== 'true'
+  ) {
+    throw new Error(
+      'Production refuses multi-URI application-level DB fallback without ALLOW_URI_FALLBACK=true. Use a single MongoDB Replica Set URI in MONGODB_URI for safe automatic primary election.'
+    );
+  }
   const targets = customTargets ?? getConfiguredDbTargets();
 
   for (const target of targets) {

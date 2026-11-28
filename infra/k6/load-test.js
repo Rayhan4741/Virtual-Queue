@@ -4,7 +4,8 @@ import { check, sleep } from 'k6';
 export const options = {
   stages: [
     { duration: '15s', target: 100 },
-    { duration: '30s', target: 500 },
+    { duration: '20s', target: 500 },
+    { duration: '30s', target: 1000 },
     { duration: '15s', target: 0 },
   ],
   thresholds: {
@@ -31,10 +32,35 @@ export default function () {
     const orgs = body?.organizations || [];
     if (orgs.length > 0) {
       const orgId = orgs[0]._id;
+
       const displayRes = http.get(`${BASE_URL}/display/${orgId}`);
       check(displayRes, {
         'display board 200': (r) => r.status === 200,
       });
+
+      const orgDetailRes = http.get(`${BASE_URL}/organizations/${orgId}`);
+      const services = orgDetailRes.json()?.services || [];
+      if (orgDetailRes.status === 200 && services.length > 0) {
+        const svcId = services[0]._id;
+        const kioskRes = http.post(
+          `${BASE_URL}/kiosk/tokens`,
+          JSON.stringify({ organizationId: orgId, serviceId: svcId, guestName: 'k6 Load User', source: 'KIOSK' }),
+          { headers: { 'Content-Type': 'application/json' } }
+        );
+        check(kioskRes, {
+          'kiosk token created (201 or 429)': (r) => r.status === 201 || r.status === 429,
+        });
+
+        if (kioskRes.status === 201) {
+          const trackingCode = kioskRes.json()?.token?.trackingCode;
+          if (trackingCode) {
+            const trackRes = http.get(`${BASE_URL}/kiosk/track/${trackingCode}`);
+            check(trackRes, {
+              'track token 200': (r) => r.status === 200,
+            });
+          }
+        }
+      }
     }
   }
 

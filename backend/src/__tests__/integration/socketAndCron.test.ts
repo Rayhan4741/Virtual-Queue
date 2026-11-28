@@ -1,6 +1,7 @@
 import http from 'http';
 import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest';
 import request from 'supertest';
+import { io as ioc } from 'socket.io-client';
 import { createApp } from '../../app.js';
 import { connectDB, disconnectDB } from '../../config/db.js';
 import { initSocketServer, emitQueueEvent, sanitizePublicTokenPayload, getIO } from '../../services/socketService.js';
@@ -179,5 +180,79 @@ describe('Socket.IO Privacy & Room Auth, CronService, and AnalyticsService', () 
     expect(analytics.counterUtilization[0].counterName).toBe('Desk 1');
     expect(analytics.counterUtilization[0].served).toBe(1);
     expect(analytics.counterUtilization[0].avgDurationMin).toBe(3);
-  });
+
+    // 4. Live socket.io-client WebSocket test: cross-tenant join:counter blocked & public PII stripped over wire
+    const adminBRes = await request(app).post('/api/auth/register').send({
+      name: 'Org B Admin',
+      phone: '01633333333',
+      password: 'Password123!',
+      role: 'ADMIN',
+    });
+    const orgBRes = await request(app).post('/api/organizations').set('Authorization', `Bearer ${adminBRes.body.accessToken}`).send({
+      name: 'Org B Clinic',
+      type: 'BANK',
+      location: { address: 'Chittagong', city: 'Chittagong' },
+    });
+    const orgBId = orgBRes.body.organization._id;
+    const svcBRes = await request(app).post('/api/services').set('Authorization', `Bearer ${adminBRes.body.accessToken}`).send({
+      organizationId: orgBId,
+      name: 'Org B Service',
+      codePrefix: 'B',
+    });
+    const counterBRes = await request(app).post('/api/admin/counters').set('Authorization', `Bearer ${adminBRes.body.accessToken}`).send({
+      organizationId: orgBId,
+      name: 'Org B Desk 1',
+      counterNumber: 1,
+      assignedServices: [svcBRes.body.service._id],
+    });
+    const counterBId = counterBRes.body.counter._id;
+
+    const staffLogin = await request(app).post('/api/auth/login').send({ phone: '01622222222', password: 'Password123!' });
+    const staffAToken = staffLogin.body.accessToken;
+
+    await new Promise<void>((resolve) => server.listen(0, resolve));
+    const port = (server.address() as { port: number }).port;
+    const url = `http://127.0.0.1:${port}`;
+
+    const staffSocket = ioc(url, { auth: { token: staffAToken }, transports: ['websocket'] });
+    const publicSocket = ioc(url, { transports: ['websocket'] });
+
+    await Promise.all([
+      new Promise<void>((resolve) => staffSocket.on('connect', resolve)),
+      new Promise<void>((resolve) => publicSocket.on('connect', resolve)),
+    ]);
+
+    const receivedOwnCounter: unknown[] = [];
+    const receivedOtherCounter: unknown[] = [];
+    const receivedPublicToken: Record<string, unknown>[] = [];
+
+    staffSocket.on('counter:updated', (data) => {
+      if ((data as { target?: string }).target === 'A') receivedOwnCounter.push(data);
+      if ((data as { target?: string }).target === 'B') receivedOtherCounter.push(data);
+    });
+    publicSocket.on('token:called', (data) => receivedPublicToken.push(data as Record<string, unknown>));
+
+    staffSocket.emit('join:counter', counterId);
+    staffSocket.emit('join:counter', counterBId); // Cross-tenant attempt -> must be ignored
+    publicSocket.emit('join:organization', orgId);
+
+    await new Promise((r) => setTimeout(r, 200));
+
+    emitQueueEvent('counter:updated', [`counter:${counterId}`], { target: 'A' });
+    emitQueueEvent('counter:updated', [`counter:${counterBId}`], { target: 'B' });
+    emitQueueEvent('token:called', [`organization:${orgId}`], { token: rawToken });
+
+    await new Promise((r) => setTimeout(r, 200));
+
+    expect(receivedOwnCounter).toHaveLength(1);
+    expect(receivedOtherCounter).toHaveLength(0);
+    expect(receivedPublicToken).toHaveLength(1);
+    const wireToken = receivedPublicToken[0].token as Record<string, unknown>;
+    expect(wireToken.tokenNumber).toBe('A-001');
+    expect(wireToken.guestPhone).toBeUndefined();
+    expect(wireToken.trackingCode).toBeUndefined();
+
+    staffSocket.disconnect();
+    publicSocket.disconnect();
+  }, 20000);
 });
